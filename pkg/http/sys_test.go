@@ -19,6 +19,7 @@ import (
 
 	"github.com/quic-go/quic-go/http3"
 
+	"needful-t.ee/versipellis/internal/sandbox"
 	"needful-t.ee/versipellis/pkg/config"
 	"needful-t.ee/versipellis/pkg/dest"
 )
@@ -33,6 +34,7 @@ type testCase struct {
 
 func TestCollectorReceiverSender(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []testCase{
 		{
@@ -277,6 +279,7 @@ func writePrivateKeyFile(t *testing.T, path string, key any) {
 
 func TestHTTP1mTLSClientAndServer(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tempDir := t.TempDir()
 	caPEM, _, caCert, caKey := generateTestCert(t, true, nil, nil)

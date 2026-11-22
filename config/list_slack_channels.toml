@@ -1,0 +1,35 @@
+# Based on:
+# - https://docs.slack.dev/authentication/installing-with-oauth
+# - https://docs.slack.dev/reference/methods/conversations.list
+#
+# Options to expose your local OAuth callback webhook publicly:
+# - https://ngrok.com/docs/share-localhost/quickstart
+# - https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/
+
+[collector]
+type = "HTTP3"
+schedule = "@every 1m"
+destination = "stdout"
+
+[collector.http3]
+method = "GET"
+url = "https://slack.com/api/conversations.list"
+headers = { content-type = "application/x-www-form-urlencoded" }
+query = { exclude_archived = "true", limit = "100", types = "public_channel" }
+
+# Same-same, but different, but still same:
+
+# [collector.http3]
+# method = "POST"
+# url = "https://slack.com/api/conversations.list"
+# body = "{ \"exclude_archived\": true, \"limit\": 100, \"types\": \"public_channel\" }"
+
+[collector.http3.auth]
+type = "OAuth"
+oauth_client_id = "12345.67890"
+oauth_client_secret = "1234567890abcdef"
+oauth_auth_url = "https://slack.com/oauth/v2/authorize"
+oauth_token_url = "https://slack.com/api/oauth.v2.access"
+oauth_callback_url = "https://..." # Via ngrok, Cloudflare Tunnel, etc.
+oauth_callback_address = "localhost:4474"
+oauth_scopes = [ "channels:read" ]

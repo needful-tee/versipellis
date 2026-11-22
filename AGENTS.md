@@ -72,16 +72,15 @@ Testing:
 
 ```shell
 # Run complete test suite to check correctness and detect flakiness.
-go test -count 5 ./pkg/...
+go test -timeout 30s -count 5 ./pkg/...
 
-# Run complete test suite with race detection and test coverage reporting.
-go test -race -coverprofile=coverage.out ./pkg/...
-
-# Exclude HTTP tests in sandboxed environments (without loopback socket access).
-go test -race $(go list ./pkg/... | grep -v /pkg/http)
+# Run complete test suite with race detection and test coverage reporting. In sandboxed environments (without
+# loopback socket access), socket-dependent tests skip themselves: check the verbose output for "--- SKIP"
+# lines, because skipped tests aren't verified, so run them outside the sandbox if you need their results.
+go test -timeout 30s -v -race -coverprofile=coverage.out ./pkg/...
 
 # Targeted test execution.
-go test -count 1 -run TestFuncName ./pkg/http/...
+go test -timeout 30s -v -count 1 -run TestFuncName ./pkg/http/...
 ```
 
 Auto-formatting + static analysis with auto-fixes (details in the next section):
@@ -133,11 +132,18 @@ Testing:
 - Prefer table-driven tests with `t.Run()`; the `dupl` lint check flags duplicated test bodies.
 - Use `t.Parallel()` and `t.Helper()` where appropriate.
 
+### Test Quality
+
+- Avoid change-detector tests: don't assert exact error, log, or response message strings. Assert behavior instead: error types (`errors.Is`, `errors.AsType`), error codes, status codes, return values, and side effects.
+- Verify that each new test detects the regression it targets: temporarily break the code it covers (e.g., remove a guard or invert a condition), confirm that the test fails, then restore the code.
+
 ### Preventing Test Flakiness
 
 - Timing-dependent tests should use `testing/synctest` (`synctest.Test`, `synctest.Sleep`, `synctest.Wait`).
+  - Real network I/O doesn't block durably, so it stops the fake clock from advancing. Servers can still run in `synctest` bubbles with an in-memory `net.Listener` that accepts `net.Pipe` connections (see `pipeListener` in `pkg/auth`).
 - SQL tests use in-memory SQLite (`modernc.org/sqlite`, pure Go) and a fake `pgPool`, so no database server is needed.
 - `pkg/http/sys_test.go` runs end-to-end tests with local loopback servers and self-generated TLS certificates.
+- Socket-dependent tests (e.g., `httptest` servers in `pkg/http`, and OAuth Authorization Code flows in `pkg/auth`) call `sandbox.RequireLoopback(t)` (`internal/sandbox`), which skips them where loopback TCP is unavailable, instead of failing after long timeouts. Shared setup that can't be skipped per test (e.g., `httptest.NewServer()`, which panics if it can't listen) should check `sandbox.CheckLoopback(t)` first.
 
 ## Design and Patterns
 
@@ -283,10 +289,11 @@ Data that a sender accepted but can't deliver goes to its fallback sender via `d
 
 ### Authentication (`pkg/auth`)
 
-- **Initial OAuth flow**: `Config.DoInitialOAuthFlow()` runs once, during `Collector.Start()` and `NewSender()` (a no-op for non-OAuth configs). A failure fails the component's startup. It then clears the parsed configuration and keeps only the runtime token state.
+- **Initial OAuth flow**: `Config.DoInitialOAuthFlow()` runs once, during `Collector.Start()` and `NewSender()` (a no-op for non-OAuth configs). A failure fails the component's startup. Either way it then clears the parsed configuration and keeps only the runtime token state.
   - **Intended**: the flow blocks (up to the OAuth client's timeout) and makes network calls while senders are initialized sequentially. This is acceptable because OAuth senders are expected to be very few, and a failed initial flow is deliberately fatal rather than lazy.
   - **Intended**: `initSenders()`, `initCollectors()`, and `initReceivers()` run before `waitForInterrupt()` installs the signal handler, so Ctrl-C during initialization uses Go's default behavior and kills the process immediately. That's why a blocked initial flow needs no cancellation of its own.
-- **Token requests**: they use a long-running context detached from request and shutdown cancellation (`execCtx` for collectors, `context.WithoutCancel` for senders), so they're bounded only by the OAuth HTTP client's timeout (never 0, at most `CloseTimeout`).
+  - **Authorization Code flows** are serialized by a package-level mutex, held from listening until the callback webhook shuts down, because collectors start concurrently: so they can share the same callback address (the redirect URL registered with the identity provider), and the user sees one browser login at a time. `CallbackTimeout` starts only after the mutex is acquired. Other grant types run concurrently.
+- **Token requests**: they use a long-running context detached from request and shutdown cancellation (`execCtx` for collectors, `context.WithoutCancel` for senders), so they're bounded only by the OAuth HTTP client's timeout (never 0, at most `CloseTimeout`). The Authorization Code exchange and JWT Bearer token requests are also capped at `auth.RequestTimeout` per attempt (`requestTimeout()`).
   - `NewSender()` wraps its context in `context.WithoutCancel()` on purpose: the token source keeps the context for later refreshes, so it must outlive the caller (see [Concurrency](#concurrency)).
 - **`oauthClient()`** (in `pkg/http/client.go`): it deliberately ignores the component's own TLS settings (system CAs, no mTLS, no HTTP/3), because identity providers are usually unrelated to the destination server, and it refuses redirects that downgrade the scheme, change the host, or that aren't 307/308 for POST.
 - **`SetHeader()`**: it clones the headers and injects the auth header per request. Its errors are converted into retryable error responses by `authErrorResponse()` in `pkg/http/client.go` (before anything is sent), subject to the component's configured retries. When the request's own context ends first, callers stop waiting but the token request continues in the background.

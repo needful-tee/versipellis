@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"net/http"
 	"testing"
+
+	"needful-t.ee/versipellis/internal/sandbox"
 )
 
 func TestReceiverListenTCPError(t *testing.T) {
@@ -34,6 +36,7 @@ func TestReceiverListenUDPError(t *testing.T) {
 
 func TestReceiverServeTCPError(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	r := &Receiver{}
 	r.tcp = r.newTCPServer(http.DefaultServeMux)
@@ -41,7 +44,7 @@ func TestReceiverServeTCPError(t *testing.T) {
 
 	ln, ok := r.listenTCP(t.Context())
 	if !ok {
-		t.Errorf("Receiver.listenTCP() ok = false, want true")
+		t.Fatalf("Receiver.listenTCP() ok = false, want true")
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -52,6 +55,7 @@ func TestReceiverServeTCPError(t *testing.T) {
 
 func TestReceiverServeUDPError(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	r := &Receiver{}
 	r.udp = r.newUDPServer(http.DefaultServeMux)
@@ -59,7 +63,7 @@ func TestReceiverServeUDPError(t *testing.T) {
 
 	conn, ok := r.listenUDP(t.Context())
 	if !ok {
-		t.Errorf("Receiver.listenUDP() ok = false, want true")
+		t.Fatalf("Receiver.listenUDP() ok = false, want true")
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 

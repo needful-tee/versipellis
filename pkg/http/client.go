@@ -371,7 +371,8 @@ func (c *Collector) requestOnce(ctx context.Context) (*http.Response, bool) {
 	}
 
 	resp = c.processResponse(resp)
-	return resp, retryable(resp.StatusCode)
+	_, retry := retryable[resp.StatusCode]
+	return resp, retry
 }
 
 //bodyclose:handled
@@ -450,7 +451,8 @@ func (s *Sender) sendOnce(ctx context.Context, u *url.URL, h http.Header, fn get
 		)
 	}
 
-	return resp, retryable(resp.StatusCode)
+	_, retry := retryable[resp.StatusCode]
+	return resp, retry
 }
 
 // authErrorResponse converts an [auth.Config.SetHeader] error into an error response and a retry decision
@@ -514,19 +516,31 @@ func newErrorResponse(statusCode int) *http.Response {
 	}
 }
 
-func retryable(statusCode int) bool {
-	if statusCode < http.StatusBadRequest { // All 2xx and 3xx status codes.
-		return false
-	}
-	switch statusCode {
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return false
-	case http.StatusMethodNotAllowed, http.StatusProxyAuthRequired, http.StatusGone, http.StatusLengthRequired:
-		return false
-	case http.StatusRequestEntityTooLarge, http.StatusRequestURITooLong, http.StatusUnsupportedMediaType:
-		return false
-	case http.StatusUnprocessableEntity, http.StatusRequestHeaderFieldsTooLarge, http.StatusNotImplemented:
-		return false
-	}
-	return true
+// Semantically the same as the "retryable" function in auth/oauth_exchange.go, but there's no "correct" location
+// for a shared definition, and they (generic HTTP vs. OAuth-specific HTTP) may diverge in the future.
+var retryable = map[int]struct{}{
+	http.StatusRequestTimeout:       {},
+	http.StatusConflict:             {},
+	http.StatusPreconditionFailed:   {},
+	http.StatusMisdirectedRequest:   {},
+	http.StatusLocked:               {},
+	http.StatusFailedDependency:     {},
+	http.StatusTooEarly:             {},
+	http.StatusPreconditionRequired: {},
+	http.StatusTooManyRequests:      {},
+	http.StatusInternalServerError:  {},
+	http.StatusBadGateway:           {},
+	http.StatusServiceUnavailable:   {},
+	http.StatusGatewayTimeout:       {},
+	http.StatusInsufficientStorage:  {},
+
+	// https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#Nonstandard_codes
+	520: {},
+	521: {},
+	522: {},
+	523: {},
+	524: {},
+	529: {},
+	598: {},
+	599: {},
 }

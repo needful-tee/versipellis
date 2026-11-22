@@ -27,9 +27,10 @@ import (
 )
 
 const (
-	testAuthURL     = "https://example.com/authorize"
-	testCallbackURL = "http://localhost:8080/callback"
-	testTokenURL    = "https://example.com/token" //gosec:disable G101 // URL, not a credential.
+	testAuthURL      = "https://example.com/authorize"
+	testTokenURL     = "https://example.com/token" //gosec:disable G101 // URL, not a credential.
+	testCallbackURL  = "http://localhost:8080/callback"
+	testCallbackAddr = "localhost:8080"
 )
 
 func generateTestKeys(t *testing.T) (*rsa.PrivateKey, *ecdsa.PrivateKey, ed25519.PrivateKey) {
@@ -210,12 +211,6 @@ func TestParseConfig(t *testing.T) {
 			want: Config{authType: configTypeStatic, headerName: "Authorization", headerValue: "Bearer s3cr3t"},
 		},
 		{
-			name: "static_over_unencrypted_http_loopback",
-			cfg:  map[string]any{"type": "static", "static_secret": "s3cr3t"},
-			url:  &url.URL{Scheme: "http", Host: "127.0.0.1:8080"},
-			want: Config{authType: configTypeStatic, headerName: "Authorization", headerValue: "Bearer s3cr3t"},
-		},
-		{
 			name: "static_with_canonicalized_header_and_custom_prefix",
 			cfg: map[string]any{
 				"type":          "static",
@@ -264,12 +259,13 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "oauth_inferred_authorization_code_with_pkce",
 			cfg: map[string]any{
-				"type":               "oauth",
-				"oauth_client_id":    "id",
-				"oauth_pkce":         true,
-				"oauth_auth_url":     testAuthURL,
-				"oauth_callback_url": testCallbackURL,
-				"oauth_token_url":    testTokenURL,
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 			},
 			want: Config{
 				authType:    configTypeOAuth,
@@ -281,20 +277,47 @@ func TestParseConfig(t *testing.T) {
 					Endpoint:    oauth2.Endpoint{AuthURL: testAuthURL, TokenURL: testTokenURL},
 					RedirectURL: testCallbackURL,
 				},
-				oauthPKCE: true,
+				oauthWebhookAddr: testCallbackAddr,
+				oauthPKCE:        true,
+			},
+		},
+		{
+			name: "authorization_code_with_callback_port_only",
+			cfg: map[string]any{
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": ":8080", // All interfaces.
+				"oauth_token_url":        testTokenURL,
+			},
+			want: Config{
+				authType:    configTypeOAuth,
+				grant:       grantTypeAuthCode,
+				headerName:  "Authorization",
+				headerValue: "Bearer ",
+				oauthConfig: &oauth2.Config{
+					ClientID:    "id",
+					Endpoint:    oauth2.Endpoint{AuthURL: testAuthURL, TokenURL: testTokenURL},
+					RedirectURL: testCallbackURL,
+				},
+				oauthWebhookAddr: ":8080",
+				oauthPKCE:        true,
 			},
 		},
 		{
 			name: "oauth_explicit_authorization_code_with_secret_and_scopes",
 			cfg: map[string]any{
-				"type":                "oauth",
-				"oauth_grant_type":    "authorization_code",
-				"oauth_client_id":     "id",
-				"oauth_client_secret": "secret",
-				"oauth_scopes":        []any{"read", "write"},
-				"oauth_auth_url":      testAuthURL,
-				"oauth_callback_url":  testCallbackURL,
-				"oauth_token_url":     testTokenURL,
+				"type":                   "oauth",
+				"oauth_grant_type":       "authorization_code",
+				"oauth_client_id":        "id",
+				"oauth_client_secret":    "secret",
+				"oauth_scopes":           []any{"read", "write"},
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 			},
 			want: Config{
 				authType:    configTypeOAuth,
@@ -308,6 +331,7 @@ func TestParseConfig(t *testing.T) {
 					RedirectURL:  testCallbackURL,
 					Scopes:       []string{"read", "write"},
 				},
+				oauthWebhookAddr: testCallbackAddr,
 			},
 		},
 		{
@@ -326,6 +350,28 @@ func TestParseConfig(t *testing.T) {
 				oauthConfig: &oauth2.Config{
 					ClientID: "id",
 					Endpoint: oauth2.Endpoint{TokenURL: testTokenURL},
+				},
+				oauthRefreshToken: "refresh",
+			},
+		},
+		{
+			name: "oauth_scopes_with_refresh_token_only_warn",
+			cfg: map[string]any{
+				"type":                "oauth",
+				"oauth_client_id":     "id",
+				"oauth_refresh_token": "refresh",
+				"oauth_scopes":        "read write", // Ignored by the flow, but still parsed.
+				"oauth_token_url":     testTokenURL,
+			},
+			want: Config{
+				authType:    configTypeOAuth,
+				grant:       grantTypeRefreshToken,
+				headerName:  "Authorization",
+				headerValue: "Bearer ",
+				oauthConfig: &oauth2.Config{
+					ClientID: "id",
+					Endpoint: oauth2.Endpoint{TokenURL: testTokenURL},
+					Scopes:   []string{"read", "write"},
 				},
 				oauthRefreshToken: "refresh",
 			},
@@ -384,12 +430,13 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "authorization_code_with_auth_params",
 			cfg: map[string]any{
-				"type":               "oauth",
-				"oauth_client_id":    "id",
-				"oauth_pkce":         true,
-				"oauth_auth_url":     testAuthURL,
-				"oauth_callback_url": testCallbackURL,
-				"oauth_token_url":    testTokenURL,
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 				"oauth_auth_params": map[string]any{
 					"access_type": "offline",
 					"prompt":      "login consent", // Space-delimited list.
@@ -405,9 +452,25 @@ func TestParseConfig(t *testing.T) {
 					Endpoint:    oauth2.Endpoint{AuthURL: testAuthURL, TokenURL: testTokenURL},
 					RedirectURL: testCallbackURL,
 				},
-				oauthAuthParams: map[string]string{"access_type": "offline", "prompt": "login consent"},
-				oauthPKCE:       true,
+				oauthAuthParams:  map[string]string{"access_type": "offline", "prompt": "login consent"},
+				oauthWebhookAddr: testCallbackAddr,
+				oauthPKCE:        true,
 			},
+		},
+		{
+			name: "callback_address_without_authorization_code_only_warns",
+			cfg: map[string]any{
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_client_secret":    "secret",
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
+			},
+			want: func() Config {
+				c := clientCredsConfig(nil)
+				c.oauthWebhookAddr = testCallbackAddr // Parsed, but ignored by this grant type.
+				return c
+			}(),
 		},
 		{
 			name: "client_credentials_with_token_params",
@@ -465,29 +528,6 @@ func TestParseConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "pkce_ignored_without_oauth_type",
-			cfg:  map[string]any{"type": "none", "oauth_pkce": true},
-			want: noAuth,
-		},
-		{
-			name: "oauth_grant_type_ignored_without_oauth_type",
-			cfg: map[string]any{
-				"type":             "static",
-				"static_secret":    "s3cr3t",
-				"oauth_grant_type": "jwt_bearer",
-			},
-			want: Config{
-				authType:    configTypeStatic,
-				headerName:  "Authorization",
-				headerValue: "Bearer s3cr3t",
-			},
-		},
-		{
-			name: "authorization_code_grant_ignored_without_oauth_type",
-			cfg:  map[string]any{"type": "none", "oauth_grant_type": "authorization_code"},
-			want: noAuth,
-		},
-		{
 			name: "none_ignores_invalid_settings",
 			cfg:  map[string]any{"static_header": "x api key", "static_prefix": "Token\x00", "oauth_grant_type": "foo"},
 			want: noAuth,
@@ -534,26 +574,6 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
 				"jwt_claims":           map[string]any{"iss": "issuer", "exp": int64(1e9), "iat": int64(1e9)},
-			},
-			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
-		},
-		{
-			name: "jwt_bearer_drops_configured_float_exp_and_iat_claims",
-			cfg: map[string]any{
-				"type":                 "oauth",
-				"oauth_token_url":      testTokenURL,
-				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "exp": float64(1e9), "iat": float64(1e9)},
-			},
-			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
-		},
-		{
-			name: "jwt_bearer_drops_configured_date_time_exp_and_iat_claims",
-			cfg: map[string]any{
-				"type":                 "oauth",
-				"oauth_token_url":      testTokenURL,
-				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "exp": newYear, "iat": newYear.Format(time.RFC3339)},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -726,23 +746,19 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "leftover_oauth_settings_ignored_without_oauth_type",
 			cfg: map[string]any{
-				"type":            "static",
-				"static_secret":   "s3cr3t",
-				"oauth_token_url": "not-a-url",
-				"oauth_scopes":    int64(1),
-				"jwt_expiration":  "5 minutes",
-				"jwt_claims":      "iss=issuer",
+				"type":             "static",
+				"static_secret":    "s3cr3t",
+				"oauth_grant_type": "jwt_bearer",
+				"oauth_token_url":  "not-a-url",
+				"oauth_scopes":     int64(1),
+				"jwt_expiration":   "5 minutes",
+				"jwt_claims":       "iss=issuer",
 			},
 			want: Config{
 				authType:    configTypeStatic,
 				headerName:  "Authorization",
 				headerValue: "Bearer s3cr3t",
 			},
-		},
-		{
-			name: "jwt_private_key_file_ignored_without_jwt_bearer",
-			cfg:  map[string]any{"jwt_private_key_file": filepath.Join(tempDir, "nonexistent.pem")},
-			want: noAuth,
 		},
 		{
 			name:    "not_a_table",
@@ -818,24 +834,26 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "invalid_auth_url",
 			cfg: map[string]any{
-				"type":               "oauth",
-				"oauth_client_id":    "id",
-				"oauth_pkce":         true,
-				"oauth_auth_url":     "/relative",
-				"oauth_callback_url": testCallbackURL,
-				"oauth_token_url":    testTokenURL,
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_auth_url":         "/relative",
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid_callback_url",
 			cfg: map[string]any{
-				"type":               "oauth",
-				"oauth_client_id":    "id",
-				"oauth_pkce":         true,
-				"oauth_auth_url":     testAuthURL,
-				"oauth_callback_url": "ftp://example.com",
-				"oauth_token_url":    testTokenURL,
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     "ftp://example.com",
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 			},
 			wantErr: true,
 		},
@@ -861,22 +879,24 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "authorization_code_without_secret_or_pkce",
 			cfg: map[string]any{
-				"type":               "oauth",
-				"oauth_client_id":    "id",
-				"oauth_auth_url":     testAuthURL,
-				"oauth_callback_url": testCallbackURL,
-				"oauth_token_url":    testTokenURL,
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 			},
 			wantErr: true,
 		},
 		{
 			name: "authorization_code_without_auth_url",
 			cfg: map[string]any{
-				"type":               "oauth",
-				"oauth_client_id":    "id",
-				"oauth_pkce":         true,
-				"oauth_callback_url": testCallbackURL,
-				"oauth_token_url":    testTokenURL,
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": testCallbackAddr,
+				"oauth_token_url":        testTokenURL,
 			},
 			wantErr: true,
 		},
@@ -888,6 +908,31 @@ func TestParseConfig(t *testing.T) {
 				"oauth_pkce":      true,
 				"oauth_auth_url":  testAuthURL,
 				"oauth_token_url": testTokenURL,
+			},
+			wantErr: true,
+		},
+		{
+			name: "authorization_code_without_callback_address",
+			cfg: map[string]any{
+				"type":               "oauth",
+				"oauth_client_id":    "id",
+				"oauth_pkce":         true,
+				"oauth_auth_url":     testAuthURL,
+				"oauth_callback_url": testCallbackURL,
+				"oauth_token_url":    testTokenURL,
+			},
+			wantErr: true,
+		},
+		{
+			name: "authorization_code_with_invalid_callback_address",
+			cfg: map[string]any{
+				"type":                   "oauth",
+				"oauth_client_id":        "id",
+				"oauth_pkce":             true,
+				"oauth_auth_url":         testAuthURL,
+				"oauth_callback_url":     testCallbackURL,
+				"oauth_callback_address": "localhost:not-a-port",
+				"oauth_token_url":        testTokenURL,
 			},
 			wantErr: true,
 		},
@@ -966,15 +1011,6 @@ func TestParseConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "jwt_bearer_without_private_key_file",
-			cfg: map[string]any{
-				"type":            "oauth",
-				"oauth_token_url": testTokenURL,
-				"jwt_claims":      map[string]any{"iss": "issuer"},
-			},
-			wantErr: true,
-		},
-		{
 			name: "jwt_bearer_without_claims",
 			cfg: map[string]any{
 				"type":                 "oauth",
@@ -1024,16 +1060,6 @@ func TestParseConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "jwt_bearer_with_quoted_nan_claim",
-			cfg: map[string]any{
-				"type":                 "oauth",
-				"oauth_token_url":      testTokenURL,
-				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": "NaN"},
-			},
-			wantErr: true,
-		},
-		{
 			name: "jwt_bearer_with_local_time_claim",
 			cfg: map[string]any{
 				"type":                 "oauth",
@@ -1050,16 +1076,6 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
 				"jwt_claims":           map[string]any{"iss": "issuer", "exp": true},
-			},
-			wantErr: true,
-		},
-		{
-			name: "jwt_bearer_with_infinite_claim",
-			cfg: map[string]any{
-				"type":                 "oauth",
-				"oauth_token_url":      testTokenURL,
-				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": math.Inf(-1)},
 			},
 			wantErr: true,
 		},

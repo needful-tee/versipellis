@@ -15,6 +15,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"needful-t.ee/versipellis/internal/sandbox"
 	"needful-t.ee/versipellis/pkg/config"
 	"needful-t.ee/versipellis/pkg/dest"
 )
@@ -131,6 +132,36 @@ func TestParseAddress(t *testing.T) { //nolint:paralleltest // [parseAddress] re
 			proto: config.ReceiverTypeHTTP,
 			want:  ":443",
 		},
+		{
+			name:  "http3_without_host",
+			addr:  ":8443",
+			proto: config.ReceiverTypeHTTP3,
+			want:  ":8443",
+		},
+		{
+			name:  "ipv4_loopback",
+			addr:  "127.0.0.1:8080",
+			proto: config.ReceiverTypeHTTP,
+			want:  "127.0.0.1:8080",
+		},
+		{
+			name:  "ipv6_loopback",
+			addr:  "[::1]:8080",
+			proto: config.ReceiverTypeHTTP3,
+			want:  "[::1]:8080",
+		},
+		{
+			name:  "ipv4_unspecified",
+			addr:  "0.0.0.0:8080",
+			proto: config.ReceiverTypeHTTP,
+			want:  "0.0.0.0:8080",
+		},
+		{
+			name:  "ipv6_unspecified",
+			addr:  "[::]:8080",
+			proto: config.ReceiverTypeHTTP3,
+			want:  "[::]:8080",
+		},
 	}
 	for _, tt := range tests { //nolint:paralleltest // [parseAddress] requires network access.
 		t.Run(tt.name, func(t *testing.T) {
@@ -146,6 +177,8 @@ func TestParseAddress(t *testing.T) { //nolint:paralleltest // [parseAddress] re
 }
 
 func TestReceiverServeHTTPAndClose(t *testing.T) { //nolint:paralleltest // [parseAddress] requires network access.
+	sandbox.RequireLoopback(t)
+
 	tests := []struct {
 		name       string
 		length     int64

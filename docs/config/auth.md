@@ -100,17 +100,26 @@ It is entirely optional, but some fields may be required in some use-cases.
 - Must start with `"https://"` (per [RFC 6749 § 3.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1)),  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
 
+`oauth_token_url` - token endpoint URL for all OAuth flows
+
+- Required when `type = "oauth"`
+- Must start with `"https://"` (per [RFC 6749 § 3.2](https://datatracker.ietf.org/doc/html/rfc6749#section-3.2)),  
+  unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
+
 `oauth_callback_url` - redirection URL back to the client in interactive OAuth flows
 
 - Required when `oauth_grant_type = "authorization_code"`
 - Must start with `"https://"` (per [RFC 6749 § 3.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1.2.1)),  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
 
-`oauth_token_url` - token endpoint URL for all OAuth flows
+`oauth_callback_address` - local TCP address to receive Authorization Code callbacks
 
-- Required when `type = "oauth"`
-- Must start with `"https://"` (per [RFC 6749 § 3.2](https://datatracker.ietf.org/doc/html/rfc6749#section-3.2)),  
-  unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
+- Required when `oauth_grant_type = "authorization_code"`
+- Examples:
+  - `"localhost:4474"`
+  - `"127.0.0.1:4474"` (IPv4)
+  - `"[::1]:4474"` (IPv6, must be enclosed in square brackets)
+  - `"0.0.0.0:4474"` or `"[::]:4474"` (all network interfaces)
 
 `oauth_refresh_token` - static refresh token
 

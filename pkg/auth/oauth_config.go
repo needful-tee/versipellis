@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -89,6 +90,7 @@ func (c *Config) parseOAuthConfig(cfg map[string]any, name string) error {
 	if c.oauthTokenParams, err = parseOAuthParams(cfg, "oauth_token_params", reservedTokenParams); err != nil {
 		return err
 	}
+	c.oauthWebhookAddr = optionalString(cfg, "oauth_callback_address", "")
 	if err := c.checkOAuthConfig(name); err != nil {
 		return err
 	}
@@ -128,7 +130,7 @@ func (c *Config) checkOAuthConfig(name string) error {
 	case c.grant == grantTypeClientCreds && c.oauthConfig.ClientSecret == "":
 		return fmt.Errorf("OAuth client secret is required for grant type %q", c.grant)
 	case c.grant == grantTypeAuthCode && c.oauthConfig.Endpoint.AuthURL == "":
-		return fmt.Errorf("OAuth auth URL is required for grant type %q", c.grant)
+		return fmt.Errorf("OAuth auth redirection URL is required for grant type %q", c.grant)
 	case c.grant == grantTypeAuthCode && c.oauthConfig.RedirectURL == "":
 		return fmt.Errorf("OAuth callback URL is required for grant type %q", c.grant)
 	case c.oauthConfig.Endpoint.TokenURL == "":
@@ -138,14 +140,26 @@ func (c *Config) checkOAuthConfig(name string) error {
 	case c.grant == grantTypeRefreshToken && len(c.oauthConfig.Scopes) > 0:
 		slog.Warn("'oauth_scopes' has no effect in 'refresh_token' OAuth flows", slog.String("name", name))
 	}
+
+	switch {
+	case c.grant == grantTypeAuthCode && c.oauthWebhookAddr == "":
+		return fmt.Errorf("OAuth callback local address is required for grant type %q", c.grant)
+	case c.grant != grantTypeAuthCode && c.oauthWebhookAddr != "":
+		slog.Warn("OAuth callback local address is supported only in 'authorization_code' flows", slog.String("name", name))
+	case c.oauthWebhookAddr != "":
+		if _, err := net.ResolveTCPAddr("tcp", c.oauthWebhookAddr); err != nil {
+			return fmt.Errorf("invalid OAuth callback local address %q: %w", c.oauthWebhookAddr, err)
+		}
+	}
+
 	if c.grant != grantTypeAuthCode && c.oauthPKCE {
 		slog.Warn("PKCE is supported only in 'authorization_code' OAuth flows", slog.String("name", name))
 	}
 	if c.grant != grantTypeAuthCode && len(c.oauthAuthParams) > 0 {
-		slog.Warn("'oauth_auth_params' is supported only in 'authorization_code' OAuth flows", slog.String("name", name))
+		slog.Warn("OAuth auth params are supported only in 'authorization_code' flows", slog.String("name", name))
 	}
 	if c.grant != grantTypeClientCreds && len(c.oauthTokenParams) > 0 {
-		slog.Warn("'oauth_token_params' is supported only in 'client_credentials' OAuth flows", slog.String("name", name))
+		slog.Warn("OAuth token params are supported only in 'client_credentials' flows", slog.String("name", name))
 	}
 
 	// OAuth URLs format validation (already checked above for required fields).

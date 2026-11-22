@@ -2,17 +2,17 @@
 
 ## `[sender.http]` Sub-Section
 
-`url` - server address, in the form `"http[s]://host[:port][/path][?query]"`
-
-- Required
-- If the host is an IPv6 address, it must be enclosed in square brackets, e.g., `[fe80::1]`
-- Query parameters may be specified here as a suffix (e.g., `?param1=value1&param2=value2`), but it's recommended to specify them in `query` (see the notes there)
-
 `method` - HTTP request method, a.k.a. verb, for transmitting data
 
 - Optional
 - Default: `"POST"`
 - Options (case insensitive): `"PATCH"`, `"POST"`, `"PUT"`
+
+`url` - server address, in the form `"http[s]://host[:port][/path][?query]"`
+
+- Required
+- If the host is an IPv6 address, it must be enclosed in square brackets, e.g., `[fe80::1]`
+- Query parameters may be specified here as a suffix (e.g., `?param1=value1&param2=value2`), but it's recommended to specify them in `query` (see the notes there)
 
 `query` - HTTP query parameters
 
