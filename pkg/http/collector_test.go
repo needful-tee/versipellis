@@ -314,7 +314,7 @@ func TestCollectorStartWithFailedOAuthFlow(t *testing.T) {
 			return
 		}
 		tokenRequests.Add(1)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contentTypeHeader, "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
 	}))

@@ -1,6 +1,7 @@
 // Package browser is an updated and slimmer version of github.com/pkg/browser.
 // It supports opening URLs in local web browsers across different operating systems.
 // This is used to enable interactive 3-legged OAuth 2 "Authorization Code" flows.
+// This package is inherently non-hermetic, so its tests are not included in CI.
 package browser
 
 import (

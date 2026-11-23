@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"math"
 	"net/url"
 	"os"
@@ -146,7 +147,7 @@ func TestParseConfig(t *testing.T) {
 	newYear := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	newYearUnix := json.Number("1767225600")
 	localNewYearUnix := json.Number(strconv.FormatInt(time.Date(2026, time.January, 1, 0, 0, 0, 0, hostTimeZone()).Unix(), 10))
-	issuerClaims := jwt.MapClaims{"iss": "issuer"}
+	issuerClaims := jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience"}
 
 	tests := []struct {
 		name    string
@@ -252,7 +253,7 @@ func TestParseConfig(t *testing.T) {
 				"oauth_grant_type":     string(grantTypeJWTBearer),
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -392,7 +393,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -545,10 +546,10 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": " " + ecPKCS8File + " ",
 				"jwt_expiration":       " 10m ",
-				"jwt_claims":           map[string]any{"iss": "issuer", "sub": " not trimmed "},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": " not trimmed ", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, 10*time.Minute,
-				jwt.MapClaims{"iss": "issuer", "sub": " not trimmed "},
+				jwt.MapClaims{"iss": "issuer", "sub": " not trimmed ", "aud": "audience"},
 			),
 		},
 		{
@@ -558,22 +559,29 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
 				"jwt_claims": map[string]any{
-					"iss": "issuer", "aud": []any{"a", "b"}, "flag": true, "f": 1.5,
+					"iss": "issuer", "sub": "subject", "aud": []any{"a", "b"}, "flag": true, "f": 1.5,
 					"n": int64(-1), "nbf": int64(1e9), "max": int64(math.MaxInt64),
 				},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, jwt.MapClaims{
-				"iss": "issuer", "aud": []any{"a", "b"}, "flag": true, "f": 1.5,
+				"iss": "issuer", "sub": "subject", "aud": []any{"a", "b"}, "flag": true, "f": 1.5,
 				"n": json.Number("-1"), "nbf": json.Number("1000000000"), "max": json.Number("9223372036854775807"),
 			}),
 		},
 		{
-			name: "jwt_bearer_drops_configured_integer_exp_and_iat_claims",
+			name: "jwt_bearer_drops_configured_exp_iat_and_jti_claims",
 			cfg: map[string]any{
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "exp": int64(1e9), "iat": int64(1e9)},
+				"jwt_claims": map[string]any{
+					"iss": "issuer",
+					"sub": "subject",
+					"aud": "audience",
+					"exp": int64(1e9),
+					"iat": int64(1e9),
+					"jti": "static",
+				},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -583,10 +591,16 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": " 1767225600 ", "note": "1.5"},
+				"jwt_claims": map[string]any{
+					"iss":  "issuer",
+					"sub":  "subject",
+					"aud":  "audience",
+					"nbf":  " 1767225600 ",
+					"note": "1.5",
+				},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, jwt.MapClaims{
-				"iss": "issuer", "nbf": newYearUnix, "note": "1.5",
+				"iss": "issuer", "sub": "subject", "aud": "audience", "nbf": newYearUnix, "note": "1.5",
 			}),
 		},
 		{
@@ -597,13 +611,16 @@ func TestParseConfig(t *testing.T) {
 				"jwt_private_key_file": ecPKCS8File,
 				"jwt_claims": map[string]any{
 					"iss":       "issuer",
+					"sub":       "subject",
+					"aud":       "audience",
 					"nbf":       " 2026-01-01T02:00:00.5+02:00 ",                                   // String in a numeric date claim.
 					"auth_time": newYear.Add(500 * time.Millisecond).In(time.FixedZone("", -3600)), // TOML date-time.
 					"note":      "2026-01-01T00:00:00Z",                                            // String in a custom claim.
 				},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, jwt.MapClaims{
-				"iss": "issuer", "nbf": newYearUnix, "auth_time": newYearUnix, "note": "2026-01-01T00:00:00Z",
+				"iss": "issuer", "sub": "subject", "aud": "audience", "nbf": newYearUnix, "auth_time": newYearUnix,
+				"note": "2026-01-01T00:00:00Z",
 			}),
 		},
 		{
@@ -614,6 +631,8 @@ func TestParseConfig(t *testing.T) {
 				"jwt_private_key_file": ecPKCS8File,
 				"jwt_claims": map[string]any{
 					"iss":       "issuer",
+					"sub":       "subject",
+					"aud":       "audience",
 					"nbf":       "2026-01-01 00:00:00.5", // String in a numeric date claim.
 					"auth_time": toml.LocalDateTime{LocalDate: toml.LocalDate{Year: 2026, Month: 1, Day: 1}},
 					"birthday":  toml.LocalDate{Year: 2026, Month: 1, Day: 1},
@@ -621,8 +640,9 @@ func TestParseConfig(t *testing.T) {
 				},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, jwt.MapClaims{
-				"iss": "issuer", "nbf": localNewYearUnix, "auth_time": localNewYearUnix, "birthday": localNewYearUnix,
-				"alarm": toml.LocalTime{Hour: 7, Minute: 32},
+				"iss": "issuer", "sub": "subject", "aud": "audience", "nbf": localNewYearUnix, "auth_time": localNewYearUnix,
+				"birthday": localNewYearUnix,
+				"alarm":    toml.LocalTime{Hour: 7, Minute: 32},
 			}),
 		},
 		{
@@ -631,10 +651,10 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "scope": "custom"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "custom"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration,
-				jwt.MapClaims{"iss": "issuer", "scope": "custom"},
+				jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "custom"},
 			),
 		},
 		{
@@ -644,11 +664,11 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"oauth_scopes":         "read write",
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "scope": "custom"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "custom"},
 			},
 			want: func() Config {
 				c := jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration,
-					jwt.MapClaims{"iss": "issuer", "scope": "custom"},
+					jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "custom"},
 				)
 				c.oauthConfig.Scopes = []string{"read", "write"}
 				return c
@@ -661,11 +681,11 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"oauth_scopes":         []any{"read", "write"},
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: func() Config {
 				c := jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration,
-					jwt.MapClaims{"iss": "issuer", "scope": "read write"},
+					jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "read write"},
 				)
 				c.oauthConfig.Scopes = []string{"read", "write"}
 				return c
@@ -677,7 +697,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecSEC1File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -687,7 +707,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": rsaFile,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodRS256, rsaKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -697,7 +717,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": edFile,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodEdDSA, edKey, defaultJWTExpiration, issuerClaims),
 		},
@@ -707,7 +727,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecP384File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES384, ecP384Key, defaultJWTExpiration, issuerClaims),
 		},
@@ -717,7 +737,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecP521File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES512, ecP521Key, defaultJWTExpiration, issuerClaims),
 		},
@@ -727,7 +747,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 				"jwt_expiration":       "1s",
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, time.Minute, issuerClaims),
@@ -738,10 +758,45 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 				"jwt_expiration":       "2h",
 			},
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, time.Hour, issuerClaims),
+		},
+		{
+			name: "oauth_inferred_jwt_bearer_with_client_credentials",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_client_id":      "id",
+				"oauth_client_secret":  "secret",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			want: func() Config {
+				c := jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims)
+				c.oauthConfig.ClientID, c.oauthConfig.ClientSecret = "id", "secret"
+				return c
+			}(),
+		},
+		{
+			// A private key doesn't override an explicit grant type.
+			name: "explicit_client_credentials_with_private_key",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_grant_type":     "client_credentials",
+				"oauth_client_id":      "id",
+				"oauth_client_secret":  "secret",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+			},
+			want: func() Config {
+				c := clientCredsConfig(nil)
+				c.jwtTemplate = jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{})
+				c.jwtExpiration = defaultJWTExpiration
+				c.jwtSigningKey = ecKey
+				return c
+			}(),
 		},
 		{
 			name: "leftover_oauth_settings_ignored_without_oauth_type",
@@ -995,7 +1050,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 				"jwt_expiration":       "5 minutes",
 			},
 			wantErr: true,
@@ -1045,7 +1100,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": math.NaN()},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "nbf": math.NaN()},
 			},
 			wantErr: true,
 		},
@@ -1055,7 +1110,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": "tomorrow"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "nbf": "tomorrow"},
 			},
 			wantErr: true,
 		},
@@ -1065,7 +1120,12 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": toml.LocalTime{Hour: 7, Minute: 32}},
+				"jwt_claims": map[string]any{
+					"iss": "issuer",
+					"sub": "subject",
+					"aud": "audience",
+					"nbf": toml.LocalTime{Hour: 7, Minute: 32},
+				},
 			},
 			wantErr: true,
 		},
@@ -1075,7 +1135,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "exp": true},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "exp": true},
 			},
 			wantErr: true,
 		},
@@ -1085,7 +1145,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": filepath.Join(tempDir, "nonexistent.pem"),
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			wantErr: true,
 		},
@@ -1095,7 +1155,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": notPEMFile,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			wantErr: true,
 		},
@@ -1105,7 +1165,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": publicKeyFile,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			wantErr: true,
 		},
@@ -1115,7 +1175,110 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecP224File,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_without_issuer_claim",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"sub": "subject", "aud": "audience"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_without_subject_claim",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "aud": "audience"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_without_audience_claim",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_with_empty_issuer_claim",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "", "sub": "subject", "aud": "audience"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_with_non_string_subject_claim",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": int64(1), "aud": "audience"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_with_empty_audience_claim",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": ""},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_with_empty_audience_array",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": []any{}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_with_non_string_audience_array",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": []any{int64(1)}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_without_private_key",
+			cfg: map[string]any{
+				"type":             "oauth",
+				"oauth_grant_type": "jwt_bearer",
+				"oauth_token_url":  testTokenURL,
+				"jwt_claims":       map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			wantErr: true,
+		},
+		{
+			// The private key is parsed even if another grant type ignores it, so invalid files aren't silently skipped.
+			name: "client_credentials_with_invalid_private_key",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_grant_type":     "client_credentials",
+				"oauth_client_id":      "id",
+				"oauth_client_secret":  "secret",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": notPEMFile,
 			},
 			wantErr: true,
 		},
@@ -1157,4 +1320,90 @@ func keysEqual(a, b any) bool {
 		Equal(x crypto.PrivateKey) bool
 	})
 	return ok && k.Equal(b)
+}
+
+// The default grant type is inferred from the settings, in a fixed order of precedence. A private key selects the JWT
+// bearer grant only if nothing before it applies, and it's ignored (with a warning) when another grant type is used.
+func TestParseConfigGrantTypePrecedence(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestECKey(t, elliptic.P256())
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("x509.MarshalPKCS8PrivateKey() error = %v", err)
+	}
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	writeTestPEM(t, keyFile, "PRIVATE KEY", der)
+
+	jwtClaims := map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"}
+	client := map[string]any{"oauth_client_id": "id", "oauth_client_secret": "secret"}
+	authCode := map[string]any{
+		"oauth_auth_url": testAuthURL, "oauth_callback_url": testCallbackURL, "oauth_callback_address": testCallbackAddr,
+	}
+	tests := []struct {
+		name    string
+		extra   []map[string]any // Merged into the base config, in order.
+		want    grantType
+		wantErr bool
+	}{
+		{
+			name:  "key_alone",
+			extra: []map[string]any{{"jwt_private_key_file": keyFile, "jwt_claims": jwtClaims}},
+			want:  grantTypeJWTBearer,
+		},
+		{
+			name:  "key_with_client_credentials",
+			extra: []map[string]any{client, {"jwt_private_key_file": keyFile, "jwt_claims": jwtClaims}},
+			want:  grantTypeJWTBearer,
+		},
+		{
+			name:  "refresh_token_takes_precedence_over_key",
+			extra: []map[string]any{client, {"oauth_refresh_token": "refresh", "jwt_private_key_file": keyFile}},
+			want:  grantTypeRefreshToken,
+		},
+		{
+			name:  "authorization_code_takes_precedence_over_key",
+			extra: []map[string]any{client, authCode, {"oauth_refresh_token": "refresh", "jwt_private_key_file": keyFile}},
+			want:  grantTypeAuthCode,
+		},
+		{
+			name:  "explicit_client_credentials_takes_precedence_over_key",
+			extra: []map[string]any{client, {"oauth_grant_type": "client_credentials", "jwt_private_key_file": keyFile}},
+			want:  grantTypeClientCreds,
+		},
+		{
+			name:  "client_credentials_without_key",
+			extra: []map[string]any{client},
+			want:  grantTypeClientCreds,
+		},
+		{
+			// Other JWT settings, without a private key, have no effect (and only warn) unless the grant is "jwt_bearer".
+			name:  "jwt_claims_and_expiration_without_key_are_ignored",
+			extra: []map[string]any{client, {"jwt_claims": jwtClaims, "jwt_expiration": "10m"}},
+			want:  grantTypeClientCreds,
+		},
+		{
+			name:    "jwt_claims_without_key_do_not_select_jwt_bearer",
+			extra:   []map[string]any{{"jwt_claims": jwtClaims}},
+			wantErr: true, // Falls back to client credentials, which require a client ID.
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := map[string]any{"type": "oauth", "oauth_token_url": testTokenURL}
+			for _, extra := range tt.extra {
+				maps.Copy(cfg, extra)
+			}
+
+			got, err := ParseConfig(cfg, &url.URL{Scheme: "https", Host: "example.com"}, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && got.grant != tt.want {
+				t.Errorf("ParseConfig() grant type = %q, want %q", got.grant, tt.want)
+			}
+		})
+	}
 }

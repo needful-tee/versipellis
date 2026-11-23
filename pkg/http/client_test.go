@@ -51,8 +51,13 @@ func TestCollectorRequestWithRetries(t *testing.T) {
 		{"200", http.StatusOK, false},
 		{"300", http.StatusMultipleChoices, false},
 		{"400", http.StatusBadRequest, false},
+		{"412", http.StatusPreconditionFailed, false},
+		{"429", http.StatusTooManyRequests, true},
+		{"501", http.StatusNotImplemented, false},
 		{"503", http.StatusServiceUnavailable, true},
+		{"525", 525, false},
 		{"529", 529, true},
+		{"999", 999, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,8 +116,13 @@ func TestSenderSendWithRetries(t *testing.T) { //nolint:paralleltest // Don't sh
 		{"200", http.StatusOK, false},
 		{"300", http.StatusMultipleChoices, false},
 		{"400", http.StatusBadRequest, false},
+		{"412", http.StatusPreconditionFailed, false},
+		{"429", http.StatusTooManyRequests, true},
+		{"501", http.StatusNotImplemented, false},
 		{"503", http.StatusServiceUnavailable, true},
+		{"525", 525, false},
 		{"529", 529, true},
+		{"999", 999, false},
 	}
 	for _, tt := range tests { //nolint:paralleltest // Don't share transports between tests.
 		t.Run(tt.name, func(t *testing.T) {
@@ -152,6 +162,82 @@ func TestSenderSendWithRetries(t *testing.T) { //nolint:paralleltest // Don't sh
 			}
 			if got := fallbackSent(); !slices.Equal(got, wantFallback) {
 				t.Errorf("sent to fallback = %q, want %q", got, wantFallback)
+			}
+		})
+	}
+}
+
+// TestRetryable must be kept in sync with TestRetryable in the auth package, which has its own copy of the policy.
+func TestRetryable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status int
+		want   bool
+	}{
+		// Not errors, redirections and unlisted client errors.
+		{0, false}, // No response at all.
+		{http.StatusContinue, false},
+		{http.StatusOK, false},
+		{http.StatusNoContent, false},
+		{http.StatusMovedPermanently, false},
+		{http.StatusNotModified, false},
+		{http.StatusBadRequest, false},
+		{http.StatusUnauthorized, false},
+		{http.StatusForbidden, false},
+		{http.StatusNotFound, false},
+		{http.StatusGone, false},
+		{http.StatusPreconditionFailed, false},
+		{http.StatusRequestEntityTooLarge, false},
+		{http.StatusMisdirectedRequest, false},
+		{http.StatusUnprocessableEntity, false},
+		{http.StatusFailedDependency, false},
+		{http.StatusPreconditionRequired, false},
+		{http.StatusRequestHeaderFieldsTooLarge, false},
+		{499, false}, // The last status before the server errors.
+		{600, false}, // Not a valid HTTP status class: only 5xx codes may be retried.
+		{999, false}, // Used by some sites to block clients (e.g., LinkedIn), so retrying it is pointless.
+
+		// The allow-list of retryable client errors.
+		{http.StatusRequestTimeout, true},
+		{http.StatusConflict, true},
+		{http.StatusLocked, true},
+		{http.StatusTooEarly, true},
+		{http.StatusTooManyRequests, true},
+
+		// The deny-list of non-retryable server errors.
+		{http.StatusNotImplemented, false},
+		{http.StatusHTTPVersionNotSupported, false},
+		{http.StatusVariantAlsoNegotiates, false},
+		{http.StatusLoopDetected, false},
+		{http.StatusNotExtended, false},
+		{http.StatusNetworkAuthenticationRequired, false},
+		{525, false}, // Cloudflare's "SSL Handshake Failed".
+		{526, false}, // Cloudflare's "Invalid SSL Certificate".
+
+		// All the other server errors are retryable, whether they're standard or not.
+		{http.StatusInternalServerError, true},
+		{http.StatusBadGateway, true},
+		{http.StatusServiceUnavailable, true},
+		{http.StatusGatewayTimeout, true},
+		{http.StatusInsufficientStorage, true},
+		{520, true},
+		{521, true},
+		{522, true},
+		{523, true},
+		{524, true},
+		{527, true},
+		{529, true},
+		{530, true},
+		{598, true},
+		{599, true},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.status), func(t *testing.T) {
+			t.Parallel()
+
+			if got := retryable(tt.status); got != tt.want {
+				t.Errorf("retryable(%d) = %v, want %v", tt.status, got, tt.want)
 			}
 		})
 	}

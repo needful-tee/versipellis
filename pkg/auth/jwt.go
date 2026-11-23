@@ -41,18 +41,12 @@ var (
 )
 
 func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
-	claims, err := parseJWTClaims(cfg)
-	if err != nil {
-		return err
-	}
-	c.jwtExpiration, err = parseJWTExpiration(cfg, name)
-	if err != nil {
-		return err
-	}
-
-	data, err := config.LoadPEMFile(config.Value(cfg, "jwt_private_key_file", ""), "JWT private key", true)
+	data, err := config.LoadPEMFile(config.Value(cfg, "jwt_private_key_file", ""), "JWT private key", false)
 	if err != nil {
 		return err //nolint:wrapcheck // No need to contextualize a sibling error.
+	}
+	if data == nil {
+		return nil
 	}
 	var method jwt.SigningMethod
 	c.jwtSigningKey, method, err = parseJWTPrivateKey(data)
@@ -60,11 +54,20 @@ func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
 		return err
 	}
 
+	c.jwtExpiration, err = parseJWTExpiration(cfg, name)
+	if err != nil {
+		return err
+	}
+	claims, err := parseJWTClaims(cfg)
+	if err != nil {
+		return err
+	}
+
 	c.jwtTemplate = jwt.NewWithClaims(method, claims)
-	return c.checkJWTClaims(name)
+	return nil
 }
 
-// ParseJWTClaims parses the "jwt_claims" TOML table, if found, into a [jwt.MapClaims] object.
+// parseJWTClaims parses the "jwt_claims" TOML table, if found, into a [jwt.MapClaims] object.
 // [jwt.MapClaims] recognizes only float64 and [json.Number] values as numeric dates, so:
 //   - TOML integers are decoded as int64 and converted losslessly to [json.Number].
 //   - TOML floats are decoded as float64, but non-finite values are rejected.
@@ -75,7 +78,7 @@ func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
 func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 	anyValue, found := cfg["jwt_claims"]
 	if !found {
-		return nil, nil
+		return jwt.MapClaims{}, nil
 	}
 	table, ok := anyValue.(map[string]any)
 	if !ok {
@@ -178,20 +181,35 @@ func parseJWTExpiration(cfg map[string]any, name string) (time.Duration, error) 
 }
 
 func (c *Config) checkJWTClaims(name string) error {
-	mc := c.jwtTemplate.Claims.(jwt.MapClaims) //nolint:errcheck // OK by definition.
+	mc, _ := c.jwtTemplate.Claims.(jwt.MapClaims)
 	if _, ok := mc["exp"]; ok {
-		slog.Warn("JWT bearer claim 'exp' (expiration time) is configured but ignored", slog.String("name", name))
+		slog.Warn("JWT claim 'exp' (expiration time) is configured but ignored", slog.String("name", name))
 		delete(mc, "exp")
 	}
 	if _, ok := mc["iat"]; ok {
-		slog.Warn("JWT bearer claim 'iat' (issued at) is configured but ignored", slog.String("name", name))
+		slog.Warn("JWT claim 'iat' (issued at) is configured but ignored", slog.String("name", name))
 		delete(mc, "iat")
 	}
+	if _, ok := mc["jti"]; ok {
+		slog.Warn("JWT claim 'jti' (JWT ID) is configured but ignored", slog.String("name", name))
+		delete(mc, "jti")
+	}
+
 	if len(mc) == 0 {
-		return fmt.Errorf("JWT claims are required for OAuth grant type %q", c.grant)
+		return fmt.Errorf(`"jwt_claims" is required for OAuth grant type %q`, c.grant)
 	}
 	if _, ok := mc["scope"]; !ok && len(c.oauthConfig.Scopes) > 0 {
 		mc["scope"] = strings.Join(c.oauthConfig.Scopes, " ")
+	}
+
+	if s, err := mc.GetIssuer(); err != nil || s == "" {
+		return errors.New("JWT claim 'iss' (issuer) is required to be a non-empty string")
+	}
+	if s, err := mc.GetSubject(); err != nil || s == "" {
+		return errors.New("JWT claim 'sub' (subject) is required to be a non-empty string")
+	}
+	if s, err := mc.GetAudience(); err != nil || len(s) == 0 || slices.Contains(s, "") {
+		return errors.New("JWT claim 'aud' (audience) is required to be a non-empty string or array of non-empty strings")
 	}
 
 	c.jwtTemplate.Claims = mc

@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"uuid"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
@@ -30,8 +32,8 @@ func (c *Config) newOAuthWebhook(ctx context.Context, addr string) *oauthWebhook
 	w := &oauthWebhook{
 		Addr:         addr,
 		ReadTimeout:  RequestTimeout,
-		WriteTimeout: RequestTimeout,
-		IdleTimeout:  CallbackTimeout,
+		WriteTimeout: RequestTimeout + ShutdownTimeout, // Respond to the browser even when the exchange is slow/stalled.
+		IdleTimeout:  RequestTimeout,
 		ErrorLog:     slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
 
 		result: make(chan bool, 1),
@@ -48,6 +50,7 @@ func (c *Config) newOAuthWebhook(ctx context.Context, addr string) *oauthWebhook
 // Redirection of the user's original OAuth request from the identity provider back to us, after user
 // authentication and authorization. Our response is sent to the browser, not to the OAuth server.
 func (ow *oauthWebhook) exchangeHandler(ctx context.Context, cfg *Config) http.HandlerFunc {
+	expectedState := cfg.oauthState
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			slog.Warn("failed to parse OAuth callback request", slog.Any("error", err))
@@ -61,8 +64,8 @@ func (ow *oauthWebhook) exchangeHandler(ctx context.Context, cfg *Config) http.H
 			respondToUser(w, http.StatusBadRequest, "error: The callback is invalid")
 			return
 		}
-		if state != cfg.oauthState {
-			slog.Warn("incorrect state in OAuth callback request", slog.String("got", state))
+		if state != expectedState {
+			slog.Warn("incorrect state in OAuth callback request")
 			respondToUser(w, http.StatusBadRequest, "error: The callback is invalid")
 			return
 		}
@@ -96,13 +99,17 @@ func (ow *oauthWebhook) exchangeHandler(ctx context.Context, cfg *Config) http.H
 
 		// Not using the received request's context because it's short-lived and we don't control it. In contrast,
 		// the provided flow context is long-running and includes an [http.Client] value for [oauth2.Config.Exchange].
-		exchangeCtx, cancel := context.WithTimeout(ctx, requestTimeout(ctx))
+		exchangeCtx, cancel := context.WithTimeout(ctx, RequestTimeout)
 		defer cancel()
 
 		token, err := cfg.oauthConfig.Exchange(exchangeCtx, code, opts...)
 		if err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+				status = http.StatusGatewayTimeout
+			}
 			slog.Warn("failed to exchange OAuth code into token", slog.Any("error", err))
-			respondToUser(w, http.StatusBadGateway, "failed: The identity provider did not return an access token")
+			respondToUser(w, status, "failed: The identity provider did not return an access token")
 			ow.result <- false
 			return
 		}
@@ -130,48 +137,80 @@ func (ow *oauthWebhook) tryClaim() bool {
 	return ow.claimed.CompareAndSwap(false, true)
 }
 
+const (
+	// Simple retry policy for JWT bearer token requests. No need for exponential
+	// backoff or jitter because there's no concurrency at this stage.
+	jwtMaxAttempts = 3
+	jwtRetryDelay  = time.Second
+
+	// MaxTokenResponseSize is the same limit that [golang.org/x/oauth2] applies to token responses,
+	// except that larger responses fail explicitly, instead of being truncated before parsing.
+	maxTokenResponseSize = 1 << 20 // 1 MiB.
+)
+
 type jwtTokenSource struct {
 	ctx context.Context //nolint:containedctx // Copied from the Go Team's own [golang.org/x/oauth2/jwt].
 
-	tokenURL string
-	method   jwt.SigningMethod
-	claims   map[string]any
-	exp      time.Duration
-	key      any
+	tokenURL     string
+	clientID     string
+	clientSecret string
+	authStyle    oauth2.AuthStyle
+
+	method jwt.SigningMethod
+	claims map[string]any
+	exp    time.Duration
+	key    any
 }
 
 func (j *jwtTokenSource) Token() (*oauth2.Token, error) {
-	now := time.Now()
-	j.claims["iat"] = now.Unix()
-	j.claims["exp"] = now.Add(j.exp).Unix()
-
-	signed, err := jwt.NewWithClaims(j.method, jwt.MapClaims(j.claims)).SignedString(j.key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign JWT with private key: %w", err)
+	switch {
+	case j.authStyle != oauth2.AuthStyleAutoDetect:
+		// Already initialized, skip this switch block.
+	case j.clientID == "" || j.clientSecret == "":
+		j.authStyle = -1 // Never send client credentials at all.
+	default:
+		j.authStyle = oauth2.AuthStyleInHeader // The first choice of [oauth2.AuthStyleAutoDetect].
 	}
 
-	token, _, err := exchangeJWT(j.ctx, j.tokenURL, signed)
+	client, ok := j.ctx.Value(oauth2.HTTPClient).(*http.Client)
+	if !ok || client == nil { // Programming error, should never happen normally for users.
+		return nil, errors.New("HTTP client not found in context for JWT exchange")
+	}
+	token, _, err := j.exchangeJWT(client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange JWT into OAuth token: %w", err)
 	}
+
 	return token, nil
 }
 
-// exchangeJWT receives from the caller a signed JWT, and sends it to an OAuth token endpoint in order
-// to obtain an OAuth access token, and potentially an OpenID Connect (OIDC) ID token, using the JWT
-// bearer flow. This function is an improved version of Config.Token() in [golang.org/x/oauth2/jwt].
-func exchangeJWT(ctx context.Context, tokenURL, signedJWT string) (*oauth2.Token, *jwt.Token, error) {
-	form := url.Values{}
-	form.Set("grant_type", string(grantTypeJWTBearer))
-	form.Set("assertion", signedJWT)
-
-	data, status, err := requestTokenWithRetries(ctx, tokenURL, form.Encode())
-	if err != nil {
-		return nil, nil, err
+// exchangeJWT sends to an OAuth token endpoint a POST request which contains (at least) a signed JWT,
+// in order to obtain an OAuth access token, and potentially an OpenID Connect (OIDC) ID token.
+func (j *jwtTokenSource) exchangeJWT(client *http.Client) (*oauth2.Token, *jwt.Token, error) {
+	var body []byte
+	var status int
+	var err error
+	for retry := 1; ; retry++ {
+		body, status, err = j.requestToken(client)
+		if body != nil {
+			break
+		}
+		if !retryable(status) || retry == jwtMaxAttempts {
+			return nil, nil, err
+		}
+		slog.Info("retrying OAuth token request", slog.Any("error", err),
+			slog.Int("status", status), slog.Int("retry", retry),
+		)
+		select {
+		case <-j.ctx.Done():
+			return nil, nil, fmt.Errorf("stopped retrying OAuth token request: %w", j.ctx.Err())
+		case <-time.After(jwtRetryDelay):
+			// Continue to the next attempt.
+		}
 	}
 
 	parsed := make(map[string]any)
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, nil, fmt.Errorf("received invalid OAuth token: %w", err)
 	}
 
@@ -207,56 +246,28 @@ func exchangeJWT(ctx context.Context, tokenURL, signedJWT string) (*oauth2.Token
 	return token.WithExtra(parsed), id, nil
 }
 
-const (
-	// Simple retry policy for JWT bearer token requests. No need for exponential backoff or jitter because
-	// there's no concurrency at this stage. Anyway, even with [RequestTimeout], the worst-case total is
-	// still much less than [minJWTExpiration], so all the attempts can reuse the same signed JWT.
-	jwtMaxAttempts = 3
-	jwtRetryDelay  = time.Second
-
-	// MaxTokenResponseSize is the same limit that [golang.org/x/oauth2] applies to token responses,
-	// except that larger responses fail explicitly, instead of being truncated before parsing.
-	maxTokenResponseSize = 1 << 20 // 1 MiB.
-)
-
-// The context must be long-running and include an [http.Client] value under the [oauth2.HTTPClient] key.
-func requestTokenWithRetries(ctx context.Context, tokenURL, form string) ([]byte, int, error) {
-	client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client)
-	if !ok || client == nil {
-		client = &http.Client{Timeout: RequestTimeout}
+// requestToken sends a single HTTP POST request and returns the response body when the status code is 2xx/400/401,
+// and either way also the HTTP status code and any error encountered. It generates and signs a new JWT assertion
+// for each request because the "jti" (JWT ID) claim has to be unique every time (especially in retries).
+func (j *jwtTokenSource) requestToken(client *http.Client) ([]byte, int, error) {
+	form, err := j.generateJWT()
+	if err != nil {
+		return nil, 0, err
 	}
 
-	for attempt := 1; ; attempt++ {
-		body, status, err := requestTokenOnce(ctx, client, tokenURL, form)
-		if body != nil {
-			return body, status, nil
-		}
-		if !retryable(status) || attempt >= jwtMaxAttempts || ctx.Err() != nil {
-			return nil, status, err
-		}
-		slog.Info("retrying OAuth token request", slog.Any("error", err), slog.Int("attempt", attempt))
-
-		select {
-		case <-ctx.Done():
-			return nil, http.StatusServiceUnavailable, fmt.Errorf("stopped retrying OAuth token request: %w", ctx.Err())
-		case <-time.After(jwtRetryDelay):
-			// Continue to the next attempt.
-		}
-	}
-}
-
-// requestTokenOnce sends a single HTTP POST request to the OAuth token endpoint with the given form data.
-// It returns the response body (when the status code is 2xx/400/401), HTTP status code, and any error encountered.
-func requestTokenOnce(ctx context.Context, client *http.Client, tokenURL, form string) ([]byte, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout(ctx))
+	ctx, cancel := context.WithTimeout(j.ctx, RequestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, j.tokenURL, form)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if j.authStyle == oauth2.AuthStyleInHeader {
+		// Form-URL-encode first, per RFC 6749 section 2.3.1.
+		req.SetBasicAuth(url.QueryEscape(j.clientID), url.QueryEscape(j.clientSecret))
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -286,40 +297,56 @@ func requestTokenOnce(ctx context.Context, client *http.Client, tokenURL, form s
 	return body, resp.StatusCode, nil // 2xx, 400, or 401.
 }
 
-// requestTimeout returns the timeout for a single OAuth token request: the timeout of the [http.Client]
-// under the context's [oauth2.HTTPClient] key (i.e. the component's timeout), but at most [RequestTimeout].
-// Without such a client, or if it has no timeout, the request's default timeout is [RequestTimeout].
-func requestTimeout(ctx context.Context) time.Duration {
-	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil && client.Timeout > 0 {
-		return min(client.Timeout, RequestTimeout)
+func (j *jwtTokenSource) generateJWT() (io.Reader, error) {
+	now := time.Now()
+	j.claims["iat"] = now.Unix()
+	j.claims["exp"] = now.Add(j.exp).Unix()
+	j.claims["jti"] = uuid.NewV4().String()
+
+	signed, err := jwt.NewWithClaims(j.method, jwt.MapClaims(j.claims)).SignedString(j.key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign JWT with private key: %w", err)
 	}
-	return RequestTimeout
+
+	form := make(url.Values)
+	form.Set("grant_type", string(grantTypeJWTBearer))
+	form.Set("assertion", signed)
+	if scope, ok := j.claims["scope"].(string); ok {
+		form.Set("scope", scope)
+	}
+	if j.clientID != "" {
+		form.Set("client_id", j.clientID)
+	}
+	// Reminder: add a one-time probe, like in [oauth2.Config.Exchange], to enable this auth style.
+	if j.authStyle == oauth2.AuthStyleInParams {
+		form.Set("client_secret", j.clientSecret)
+	}
+
+	return strings.NewReader(form.Encode()), nil
 }
 
-// Semantically the same as the "retryable" map in http/client.go, but there's no "correct" location
-// for a shared definition, and they (generic HTTP vs. OAuth-specific HTTP) may diverge in the future.
+// The same as retryable() in http/client.go, but generic HTTP and OAuth-specific policies may diverge in the future.
 func retryable(status int) bool {
 	switch status {
+	// Allow-list of retryable 4xx codes.
 	case http.StatusRequestTimeout,
 		http.StatusConflict,
-		http.StatusPreconditionFailed,
-		http.StatusMisdirectedRequest,
 		http.StatusLocked,
-		http.StatusFailedDependency,
 		http.StatusTooEarly,
-		http.StatusPreconditionRequired,
-		http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout,
-		http.StatusInsufficientStorage:
+		http.StatusTooManyRequests:
 		return true
-	// https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#Nonstandard_codes
-	case 520, 521, 522, 523, 524, 529, 598, 599:
-		return true
-	default:
+	// Deny-list of non-retryable 5xx codes.
+	case http.StatusNotImplemented,
+		http.StatusHTTPVersionNotSupported,
+		http.StatusVariantAlsoNegotiates,
+		http.StatusLoopDetected,
+		http.StatusNotExtended,
+		http.StatusNetworkAuthenticationRequired,
+		525, 526: // https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#Nonstandard_codes
 		return false
+	// Besides all the above, 5xx codes should be retryable by default, but 2xx-4xx shouldn't be.
+	default:
+		return status >= http.StatusInternalServerError && status < 600
 	}
 }
 

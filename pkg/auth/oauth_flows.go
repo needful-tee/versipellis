@@ -162,16 +162,21 @@ func (c *Config) oauthAuthCodeOpts() []oauth2.AuthCodeOption {
 	return opts
 }
 
+// The provided flow context must be long-running and include an [http.Client] value for [jwtTokenSource.Token].
 func (c *Config) oauthJWTBearerFlow(ctx context.Context) error {
 	src := &jwtTokenSource{
-		ctx:      ctx,
-		tokenURL: c.oauthConfig.Endpoint.TokenURL,
-		claims:   maps.Clone(map[string]any(c.jwtTemplate.Claims.(jwt.MapClaims))), //nolint:errcheck // OK by definition.
-		method:   c.jwtTemplate.Method,
-		exp:      c.jwtExpiration,
-		key:      c.jwtSigningKey,
+		ctx: ctx,
+
+		tokenURL:     c.oauthConfig.Endpoint.TokenURL,
+		clientID:     c.oauthConfig.ClientID,
+		clientSecret: c.oauthConfig.ClientSecret,
+
+		claims: maps.Clone(map[string]any(c.jwtTemplate.Claims.(jwt.MapClaims))), //nolint:errcheck // OK by definition.
+		method: c.jwtTemplate.Method,
+		exp:    c.jwtExpiration,
+		key:    c.jwtSigningKey,
 	}
-	token, err := src.Token()
+	token, err := src.Token() //nolint:contextcheck // [oauth2.TokenSource.Token] can't accept a context.
 	if err != nil {
 		return err
 	}

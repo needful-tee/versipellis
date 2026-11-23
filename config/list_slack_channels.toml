@@ -14,14 +14,22 @@ destination = "stdout"
 [collector.http3]
 method = "GET"
 url = "https://slack.com/api/conversations.list"
-headers = { content-type = "application/x-www-form-urlencoded" }
 query = { exclude_archived = "true", limit = "100", types = "public_channel" }
 
-# Same-same, but different, but still same:
+# Same-same, but different, but still same (POST with a URL-encoded body instead of GET):
 
 # [collector.http3]
 # method = "POST"
 # url = "https://slack.com/api/conversations.list"
+# headers = { content-type = "application/x-www-form-urlencoded" }
+# body = "exclude_archived=true&limit=100&types=public_channel"
+
+# Same-same, but different, but still same (UTF8-encoded JSON body instead of a web-form):
+
+# [collector.http3]
+# method = "POST"
+# url = "https://slack.com/api/conversations.list"
+# headers = { content-type = "application/json" }
 # body = "{ \"exclude_archived\": true, \"limit\": 100, \"types\": \"public_channel\" }"
 
 [collector.http3.auth]
@@ -33,3 +41,4 @@ oauth_token_url = "https://slack.com/api/oauth.v2.access"
 oauth_callback_url = "https://..." # Via ngrok, Cloudflare Tunnel, etc.
 oauth_callback_address = "localhost:4474"
 oauth_scopes = [ "channels:read" ]
+oauth_pkce = false

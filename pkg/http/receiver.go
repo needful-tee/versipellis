@@ -58,7 +58,7 @@ func NewReceiver(base *config.BaseReceiver, cfg map[string]any) (*Receiver, erro
 	if r.timeout, err = time.ParseDuration(config.Value(cfg, "timeout", defaultRequestTimeout.String())); err != nil {
 		return nil, fmt.Errorf("invalid timeout duration: %w", err)
 	}
-	// For us, 0 is the same as negative values, but not in Go.
+	// For us, 0 is the same as negative values, but not in Go contexts.
 	// This normalization simplifies HTTP server construction.
 	r.timeout = max(r.timeout, 0)
 

@@ -14,7 +14,7 @@ import (
 )
 
 func (r *Receiver) newTCPServer(handler http.Handler) *http.Server {
-	return &http.Server{
+	srv := &http.Server{
 		Addr:      r.address,
 		Handler:   handler,
 		TLSConfig: r.tls,
@@ -27,6 +27,10 @@ func (r *Receiver) newTCPServer(handler http.Handler) *http.Server {
 		ErrorLog:  slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
 		ConnState: r.connState,
 	}
+	if r.timeout > 0 {
+		srv.WriteTimeout += time.Second // Enable [http.TimeoutHandler]'s 503 instead of a connection reset.
+	}
+	return srv
 }
 
 func (r *Receiver) newUDPServer(handler http.Handler) *http3.Server {

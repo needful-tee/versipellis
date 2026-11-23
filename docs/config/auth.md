@@ -24,10 +24,12 @@ It is entirely optional, but some fields may be required in some use-cases.
 `basic_username` - username for basic authentication
 
 - Required when `type = "basic"`
+- Has no effect otherwise
 
 `basic_password` - password for basic authentication
 
 - Required when `type = "basic"`
+- Has no effect otherwise
 
 ### Static Key or Token
 
@@ -77,22 +79,27 @@ It is entirely optional, but some fields may be required in some use-cases.
 - Dynamic default, based on these ordered rules:
   1. `"authorization_code"` if `oauth_auth_url` _or_ `oauth_callback_url` is set
   2. `"refresh_token"` if `oauth_refresh_token` is set
-  3. `"client_credentials"` if `oauth_client_id` is set
-  4. `"jwt_bearer"` otherwise
+  3. `"jwt_bearer"` if `jwt_private_key_file` is set
+  4. `"client_credentials"` otherwise
 - Options (case insensitive):
   - [`"authorization_code"`](https://oauth.net/2/grant-types/authorization-code/) (3-legged flow requiring one-time user interaction via a local browser)
   - [`"client_credentials"`](https://oauth.net/2/grant-types/client-credentials/)
   - [`"refresh_token"`](https://oauth.net/2/grant-types/refresh-token/)
-  - [`"jwt_bearer"`](https://oauth.net/2/jwt/) (normalized to `"urn:ietf:params:oauth:grant-type:jwt-bearer"`)
+  - [`"jwt_bearer"`](https://oauth.net/private-key-jwt/) (normalized to `"urn:ietf:params:oauth:grant-type:jwt-bearer"`)
 
 `oauth_client_id` - client ID for most OAuth flows
 
 - Required when `type = "oauth"`, _unless_ `oauth_grant_type = "jwt_bearer"`
+- Optional when `oauth_grant_type = "jwt_bearer"`
 
 `oauth_client_secret` - client secret for some OAuth flows
 
-- Required when `oauth_grant_type = "authorization_code"`, _unless_ `oauth_pkce = true`
-- Also required when `oauth_grant_type = "client_credentials"`
+- Required when:
+  - `oauth_grant_type = "authorization_code"`, _unless_ `oauth_pkce = true`
+  - `oauth_grant_type = "client_credentials"`
+- Optional when:
+  - `oauth_grant_type = "refresh_token"`
+  - `oauth_grant_type = "jwt_bearer"`
 
 `oauth_auth_url` - authorization endpoint URL for interactive OAuth flows
 
@@ -183,16 +190,16 @@ It is entirely optional, but some fields may be required in some use-cases.
 `jwt_claims` - static claims in each generated token
 
 - Required when `oauth_grant_type = "jwt_bearer"`
+- `exp`, `iat`, and `jti` are ignored (because they're set automatically in each generated token)
 - Values may be of any TOML type; TOML date-times are converted to Unix timestamps (whole seconds)
   - Local date-times and dates (without a time zone offset) are in the host's local time zone, dates at midnight
-  - `exp`, `nbf`, and `iat` must be numbers or date-times, which may also be quoted strings in the same formats
-- `exp` and `iat` are ignored, because they're set automatically in each generated token (see `jwt_expiration`)
+  - `nbf` must be a number or a date-time, which may also be a quoted string in the same format
 - The TOML file format supports multiple representation options for key-value pairs:
 
   ```toml
   [*.auth]
   # ...
-  jwt_claims = { iss = "value1", sub = "value2", ... }
+  jwt_claims = { iss = "value1", sub = "value2", aud = "value3", ... }
   ```
 
   ```toml
@@ -201,6 +208,7 @@ It is entirely optional, but some fields may be required in some use-cases.
   jwt_claims = {
       iss = "value1",
       sub = "value2",
+      aud = "value3",
       # ...
   }
   ```
@@ -210,6 +218,7 @@ It is entirely optional, but some fields may be required in some use-cases.
   # ...
   jwt_claims.iss = "value1"
   jwt_claims.sub = "value2"
+  jwt_claims.aud = "value3"
   # ...
   ```
 
@@ -220,5 +229,6 @@ It is entirely optional, but some fields may be required in some use-cases.
   [*.auth.jwt_claims]
   iss = "value1"
   sub = "value2"
+  aud = "value3"
   # ...
   ```

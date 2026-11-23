@@ -371,8 +371,7 @@ func (c *Collector) requestOnce(ctx context.Context) (*http.Response, bool) {
 	}
 
 	resp = c.processResponse(resp)
-	_, retry := retryable[resp.StatusCode]
-	return resp, retry
+	return resp, retryable(resp.StatusCode)
 }
 
 //bodyclose:handled
@@ -450,9 +449,7 @@ func (s *Sender) sendOnce(ctx context.Context, u *url.URL, h http.Header, fn get
 			slog.Time("start_time", start), slog.Duration("duration", time.Since(start)),
 		)
 	}
-
-	_, retry := retryable[resp.StatusCode]
-	return resp, retry
+	return resp, retryable(resp.StatusCode)
 }
 
 // authErrorResponse converts an [auth.Config.SetHeader] error into an error response and a retry decision
@@ -516,31 +513,27 @@ func newErrorResponse(statusCode int) *http.Response {
 	}
 }
 
-// Semantically the same as the "retryable" function in auth/oauth_exchange.go, but there's no "correct" location
-// for a shared definition, and they (generic HTTP vs. OAuth-specific HTTP) may diverge in the future.
-var retryable = map[int]struct{}{
-	http.StatusRequestTimeout:       {},
-	http.StatusConflict:             {},
-	http.StatusPreconditionFailed:   {},
-	http.StatusMisdirectedRequest:   {},
-	http.StatusLocked:               {},
-	http.StatusFailedDependency:     {},
-	http.StatusTooEarly:             {},
-	http.StatusPreconditionRequired: {},
-	http.StatusTooManyRequests:      {},
-	http.StatusInternalServerError:  {},
-	http.StatusBadGateway:           {},
-	http.StatusServiceUnavailable:   {},
-	http.StatusGatewayTimeout:       {},
-	http.StatusInsufficientStorage:  {},
-
-	// https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#Nonstandard_codes
-	520: {},
-	521: {},
-	522: {},
-	523: {},
-	524: {},
-	529: {},
-	598: {},
-	599: {},
+// The same as retryable() in auth/oauth_exchange.go, but generic HTTP and OAuth-specific may diverge in the future.
+func retryable(status int) bool {
+	switch status {
+	// Allow-list of retryable 4xx codes.
+	case http.StatusRequestTimeout,
+		http.StatusConflict,
+		http.StatusLocked,
+		http.StatusTooEarly,
+		http.StatusTooManyRequests:
+		return true
+	// Deny-list of non-retryable 5xx codes.
+	case http.StatusNotImplemented,
+		http.StatusHTTPVersionNotSupported,
+		http.StatusVariantAlsoNegotiates,
+		http.StatusLoopDetected,
+		http.StatusNotExtended,
+		http.StatusNetworkAuthenticationRequired,
+		525, 526: // https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#Nonstandard_codes
+		return false
+	// Besides all the above, 5xx codes should be retryable by default, but 2xx-4xx shouldn't be.
+	default:
+		return status >= http.StatusInternalServerError && status < 600
+	}
 }

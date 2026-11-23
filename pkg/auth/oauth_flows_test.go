@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -166,11 +167,112 @@ func TestConfigDoInitialOAuthFlow(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecFile,
-				"jwt_claims":           map[string]any{"iss": "issuer", "nbf": int64(1e9)}, // Signable integer claim.
+				"jwt_claims": map[string]any{
+					"iss": "issuer",
+					"sub": "subject",
+					"aud": "audience",
+					"nbf": int64(1e9),
+				}, // Signable integer claim.
 			},
 			status:     http.StatusOK,
 			body:       okBody,
 			wantForms:  []url.Values{jwtBearerForm},
+			wantAuths:  []string{""},
+			wantHeader: "Bearer t0k3n",
+		},
+		{
+			name: "jwt_bearer_with_client_credentials_in_header",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_client_id":      "id",
+				"oauth_client_secret":  "secret",
+				"oauth_scopes":         "read write",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecFile,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			status: http.StatusOK,
+			body:   okBody,
+			wantForms: []url.Values{
+				{
+					"grant_type": {string(grantTypeJWTBearer)},
+					"assertion":  {"signed JWT"},
+					"client_id":  {"id"},
+					"scope":      {"read write"},
+				},
+			},
+			wantAuths:  []string{basicAuth},
+			wantHeader: "Bearer t0k3n",
+		},
+		{
+			// RFC 6749 section 2.3.1 requires encoding the credentials as form values before using them in the header.
+			name: "jwt_bearer_with_special_characters_in_client_credentials",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_client_id":      "my id",
+				"oauth_client_secret":  "s&cr+t%",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecFile,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			status: http.StatusOK,
+			body:   okBody,
+			wantForms: []url.Values{
+				{"grant_type": {string(grantTypeJWTBearer)}, "assertion": {"signed JWT"}, "client_id": {"my id"}},
+			},
+			wantAuths:  []string{"Basic " + base64.StdEncoding.EncodeToString([]byte("my+id:s%26cr%2Bt%25"))},
+			wantHeader: "Bearer t0k3n",
+		},
+		{
+			// The encoding of the credentials makes it safe to use a colon in the client ID, despite RFC 7617.
+			name: "jwt_bearer_with_colon_in_client_id",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_client_id":      "a:b",
+				"oauth_client_secret":  "secret",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecFile,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			status: http.StatusOK,
+			body:   okBody,
+			wantForms: []url.Values{
+				{"grant_type": {string(grantTypeJWTBearer)}, "assertion": {"signed JWT"}, "client_id": {"a:b"}},
+			},
+			wantAuths:  []string{"Basic " + base64.StdEncoding.EncodeToString([]byte("a%3Ab:secret"))},
+			wantHeader: "Bearer t0k3n",
+		},
+		{
+			name: "jwt_bearer_with_client_id_only_identifies_a_public_client",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_client_id":      "id",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecFile,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			status: http.StatusOK,
+			body:   okBody,
+			wantForms: []url.Values{
+				{"grant_type": {string(grantTypeJWTBearer)}, "assertion": {"signed JWT"}, "client_id": {"id"}},
+			},
+			wantAuths:  []string{""},
+			wantHeader: "Bearer t0k3n",
+		},
+		{
+			name: "jwt_bearer_with_scopes",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_scopes":         "read write",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecFile,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
+			},
+			status: http.StatusOK,
+			body:   okBody,
+			wantForms: []url.Values{
+				{"grant_type": {string(grantTypeJWTBearer)}, "assertion": {"signed JWT"}, "scope": {"read write"}},
+			},
 			wantAuths:  []string{""},
 			wantHeader: "Bearer t0k3n",
 		},
@@ -180,7 +282,7 @@ func TestConfigDoInitialOAuthFlow(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecFile,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			status:    http.StatusBadRequest,
 			body:      `{"error":"invalid_grant"}`,
@@ -194,7 +296,7 @@ func TestConfigDoInitialOAuthFlow(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecFile,
-				"jwt_claims":           map[string]any{"iss": "issuer"},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			status:    http.StatusOK,
 			body:      `{"token_type":"Bearer"}`,
@@ -250,8 +352,25 @@ func TestConfigDoInitialOAuthFlow(t *testing.T) {
 					}, jwt.WithValidMethods([]string{"ES256"})); err != nil {
 						t.Errorf("token request %d has an invalid JWT assertion: %v", i+1, err)
 					}
-					if claims["iss"] != "issuer" {
-						t.Errorf("token request %d JWT iss claim = %v, want %q", i+1, claims["iss"], "issuer")
+					for claim, want := range map[string]string{"iss": "issuer", "sub": "subject", "aud": "audience"} {
+						if claims[claim] != want {
+							t.Errorf("token request %d JWT %s claim = %v, want %q", i+1, claim, claims[claim], want)
+						}
+					}
+					// Each token has a unique ID, and a lifetime that matches the default expiration.
+					if jti, _ := claims["jti"].(string); jti == "" {
+						t.Errorf("token request %d JWT jti claim = %v, want a unique ID", i+1, claims["jti"])
+					}
+					iat, _ := claims.GetIssuedAt()
+					exp, _ := claims.GetExpirationTime()
+					if iat == nil || exp == nil || exp.Sub(iat.Time) != defaultJWTExpiration {
+						t.Errorf(
+							"token request %d JWT iat = %v and exp = %v, want a %v lifetime",
+							i+1,
+							iat,
+							exp,
+							defaultJWTExpiration,
+						)
 					}
 					form.Set("assertion", "signed JWT")
 				}
