@@ -26,19 +26,13 @@ const (
 	maxJWTExpiration     = time.Hour
 )
 
-var (
-	// Registered JWT claims whose values must be [jwt.NumericDate]s.
-	// See: https://datatracker.ietf.org/doc/html/rfc7519#section-4.1
-	numericDateClaims = []string{"exp", "nbf", "iat"}
-
-	dateTimeLayouts = []string{
-		time.RFC3339,
-		"2006-01-02T15:04:05",       // [time.RFC3339] without timezone offset.
-		"2006-01-02 15:04:05Z07:00", // [time.RFC3339] with a space instead of a 'T'.
-		time.DateTime,
-		time.DateOnly,
-	}
-)
+var dateTimeLayouts = []string{
+	time.RFC3339,
+	"2006-01-02T15:04:05",       // [time.RFC3339] without timezone offset.
+	"2006-01-02 15:04:05Z07:00", // [time.RFC3339] with a space instead of a 'T'.
+	time.DateTime,
+	time.DateOnly,
+}
 
 func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
 	data, err := config.LoadPEMFile(config.Value(cfg, "jwt_private_key_file", ""), "JWT private key", false)
@@ -87,6 +81,10 @@ func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 
 	table = maps.Clone(table)
 	for k, v := range table {
+		if k == "exp" || k == "iat" {
+			continue // Ignored (and removed) in [Config.checkJWTClaims], so their values don't matter.
+		}
+
 		switch n := v.(type) {
 		case int64:
 			table[k] = json.Number(strconv.FormatInt(n, 10))
@@ -101,8 +99,8 @@ func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 		case toml.LocalDate:
 			table[k] = numericDate(n.AsTime(hostTimeZone()))
 		case string:
-			if !slices.Contains(numericDateClaims, k) {
-				continue
+			if k != "nbf" {
+				continue // Registered JWT claim whose value must be a [jwt.NumericDate] (RFC 7519 §4.1).
 			}
 			d, err := parseNumericDate(n)
 			if err != nil {
@@ -112,7 +110,7 @@ func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 		}
 
 		// Anything else (e.g., TOML local times without a date) can't be a numeric date.
-		if slices.Contains(numericDateClaims, k) {
+		if k == "nbf" {
 			switch table[k].(type) {
 			case float64, json.Number:
 			default:

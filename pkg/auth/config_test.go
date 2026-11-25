@@ -586,6 +586,38 @@ func TestParseConfig(t *testing.T) {
 			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
 		},
 		{
+			name: "jwt_bearer_ignores_the_types_of_exp_and_iat_claims",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims": map[string]any{
+					"iss": "issuer",
+					"sub": "subject",
+					"aud": "audience",
+					"exp": true,
+					"iat": toml.LocalTime{Hour: 7, Minute: 32},
+				},
+			},
+			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
+		},
+		{
+			name: "jwt_bearer_ignores_non_finite_exp_and_iat_claims",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims": map[string]any{
+					"iss": "issuer",
+					"sub": "subject",
+					"aud": "audience",
+					"exp": math.NaN(),
+					"iat": math.Inf(1),
+				},
+			},
+			want: jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration, issuerClaims),
+		},
+		{
 			name: "jwt_bearer_converts_quoted_number_claims",
 			cfg: map[string]any{
 				"type":                 "oauth",
@@ -1135,7 +1167,7 @@ func TestParseConfig(t *testing.T) {
 				"type":                 "oauth",
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
-				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "exp": true},
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "nbf": true},
 			},
 			wantErr: true,
 		},
