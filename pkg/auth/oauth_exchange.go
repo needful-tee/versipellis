@@ -235,7 +235,7 @@ func (j *jwtTokenSource) exchangeJWT(client *http.Client) (*oauth2.Token, *jwt.T
 
 	parsed := make(map[string]any)
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, nil, fmt.Errorf("received invalid OAuth token: %w", err)
+		return nil, nil, fmt.Errorf("OAuth token endpoint returned HTTP status %d with non-JSON body: %w", status, err)
 	}
 
 	// OAuth error response (RFC 6749 §5.2), the same error type as in [golang.org/x/oauth2]'s own grants.
@@ -246,8 +246,8 @@ func (j *jwtTokenSource) exchangeJWT(client *http.Client) (*oauth2.Token, *jwt.T
 			ErrorURI:         extract[string](parsed, "error_uri"),
 		}
 	}
-	if status >= http.StatusBadRequest {
-		return nil, nil, fmt.Errorf("OAuth token endpoint returned error status %d without details", status)
+	if status >= http.StatusMultipleChoices {
+		return nil, nil, fmt.Errorf("OAuth token endpoint returned HTTP status %d without details", status)
 	}
 
 	// OAuth.

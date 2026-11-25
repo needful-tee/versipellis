@@ -563,6 +563,12 @@ func TestExchangeJWT(t *testing.T) {
 			wantErr:  true,
 		},
 		{
+			name:     "300_status_with_valid_token",
+			tokenURL: testTokenURL,
+			client:   &http.Client{Transport: &fakeTokenEndpoint{status: http.StatusMultipleChoices, body: okBody}},
+			wantErr:  true,
+		},
+		{
 			name:     "403_status_with_oauth_error_is_not_parsed",
 			tokenURL: testTokenURL,
 			client: &http.Client{

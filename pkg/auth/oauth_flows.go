@@ -101,7 +101,7 @@ func (c *Config) oauthAuthCodeFlow(ctx context.Context) error {
 	defer webhook.shutdown(ctx)
 	go func() {
 		if err := webhook.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("OAuth callback webhook error", slog.Any("error", err), slog.String("tcp_addr", c.oauthWebhookAddr))
+			slog.Error("OAuth callback webhook error", slog.Any("error", err), slog.String("addr", webhook.Addr))
 		}
 	}()
 
