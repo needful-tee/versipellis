@@ -205,7 +205,7 @@ func TestConfigDoInitialOAuthFlow(t *testing.T) {
 			wantHeader: "Bearer t0k3n",
 		},
 		{
-			// RFC 6749 section 2.3.1 requires encoding the credentials as form values before using them in the header.
+			// RFC 6749 §2.3.1 requires encoding the credentials as form values before using them in the header.
 			name: "jwt_bearer_with_special_characters_in_client_credentials",
 			cfg: map[string]any{
 				"type":                 "oauth",

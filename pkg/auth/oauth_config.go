@@ -188,9 +188,9 @@ func (c *Config) checkOAuthConfig(name string) error {
 	return checkOAuthURL(c.oauthConfig.Endpoint.TokenURL, "token")
 }
 
-// checkOAuthURL validates an optional OAuth URL, which must use TLS (RFC 6749, sections 3.1, 3.1.2.1, and 3.2),
+// checkOAuthURL validates an optional OAuth URL, which must use TLS (RFC 6749, §§ 3.1, 3.1.2.1, and 3.2),
 // because OAuth requests and responses contain credentials and tokens. Loopback hosts are exempt, because their
-// traffic never leaves the host (e.g., callbacks to native apps, per RFC 8252, section 7.3, and local test servers).
+// traffic never leaves the host (e.g., callbacks to native apps, per RFC 8252, §7.3, and local test servers).
 func checkOAuthURL(rawURL, desc string) error {
 	u, err := config.ParseURL(rawURL, "", false)
 	switch {

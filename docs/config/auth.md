@@ -85,7 +85,7 @@ It is entirely optional, but some fields may be required in some use-cases.
   - [`"authorization_code"`](https://oauth.net/2/grant-types/authorization-code/) (3-legged flow requiring one-time user interaction via a local browser)
   - [`"client_credentials"`](https://oauth.net/2/grant-types/client-credentials/)
   - [`"refresh_token"`](https://oauth.net/2/grant-types/refresh-token/)
-  - [`"jwt_bearer"`](https://oauth.net/private-key-jwt/) (normalized to `"urn:ietf:params:oauth:grant-type:jwt-bearer"`)
+  - [`"jwt_bearer"`](https://datatracker.ietf.org/doc/html/rfc7523) (normalized to `"urn:ietf:params:oauth:grant-type:jwt-bearer"`)
 
 `oauth_client_id` - client ID for most OAuth flows
 
@@ -104,22 +104,29 @@ It is entirely optional, but some fields may be required in some use-cases.
 `oauth_auth_url` - authorization endpoint URL for interactive OAuth flows
 
 - Required when `oauth_grant_type = "authorization_code"`
-- Must start with `"https://"` (per [RFC 6749 § 3.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1)),  
+- Must start with `"https://"` (per [RFC 6749 §3.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1)),  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
 
 `oauth_token_url` - token endpoint URL for all OAuth flows
 
 - Required when `type = "oauth"`
-- Must start with `"https://"` (per [RFC 6749 § 3.2](https://datatracker.ietf.org/doc/html/rfc6749#section-3.2)),  
+- Must start with `"https://"` (per [RFC 6749 §3.2](https://datatracker.ietf.org/doc/html/rfc6749#section-3.2)),  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
 
 `oauth_callback_url` - redirection URL back to the client in interactive OAuth flows
 
 - Required when `oauth_grant_type = "authorization_code"`
-- Must start with `"https://"` (per [RFC 6749 § 3.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1.2.1)),  
+- Must start with `"https://"` (based on, but stricter than, [RFC 6749 §3.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1.2.1))  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
 
 `oauth_callback_address` - local TCP address to receive Authorization Code callbacks
+
+> [!NOTE]
+> The callback listener serves plain **HTTP, not HTTPS**, while `oauth_callback_url`
+> must start with `"https://"` (unless both use a loopback address). This usually means you
+> need a trusted [TLS termination proxy](https://en.wikipedia.org/wiki/TLS_termination_proxy),
+> a.k.a. a reverse tunnel, such as [ngrok](https://ngrok.com/docs/share-localhost/quickstart),
+> [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/), etc.
 
 - Required when `oauth_grant_type = "authorization_code"`
 - Examples:
@@ -190,7 +197,8 @@ It is entirely optional, but some fields may be required in some use-cases.
 `jwt_claims` - static claims in each generated token
 
 - Required when `oauth_grant_type = "jwt_bearer"`
-- `exp`, `iat`, and `jti` are ignored (because they're set automatically in each generated token)
+- Required keys: `iss` (issuer), `sub` (subject), `aud` (audience)
+- Ignored keys: `exp`, `iat`, and `jti` (because they're set automatically in each generated token)
 - Values may be of any TOML type; TOML date-times are converted to Unix timestamps (whole seconds)
   - Local date-times and dates (without a time zone offset) are in the host's local time zone, dates at midnight
   - `nbf` must be a number or a date-time, which may also be a quoted string in the same format

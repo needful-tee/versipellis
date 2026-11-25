@@ -504,7 +504,7 @@ func TestExchangeJWT(t *testing.T) {
 		client   *http.Client
 		loopback bool // Whether the case needs real loopback TCP.
 		wantErr  bool
-		wantCode string // The parsed OAuth error code (RFC 6749 section 5.2), if any.
+		wantCode string // The parsed OAuth error code (RFC 6749 §5.2), if any.
 	}{
 		{
 			name:     "real_client",
@@ -788,6 +788,249 @@ func TestExchangeJWTRetries(t *testing.T) {
 					t.Errorf("exchangeJWT() returned after %v, want %v", elapsed, tt.wantElapsed)
 				}
 			})
+		})
+	}
+}
+
+// roundTripFunc adapts a function to an [http.RoundTripper], for token endpoints that need custom behavior.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// If the identity provider rejects the client authentication of a token request, the other
+// style (client credentials in the form instead of the header) is tried once, and a style
+// that worked is reused. If both are rejected, the credentials aren't sent anymore.
+func TestJWTTokenSourceAuthStyleFallback(t *testing.T) {
+	t.Parallel()
+
+	const (
+		styleHeader = "header" // Client credentials in the "Authorization" header.
+		styleParams = "params" // Client credentials in the form.
+		stylePlain  = "plain"  // No client credentials.
+	)
+	tests := []struct {
+		name       string
+		noSecret   bool
+		accepts    string // The only client authentication style that the endpoint accepts, if any.
+		errCode    string // The OAuth error code of rejections.
+		wantFirst  []string
+		wantSecond []string
+		wantErr    bool
+	}{
+		{
+			name:       "header_style_accepted",
+			accepts:    styleHeader,
+			wantFirst:  []string{styleHeader},
+			wantSecond: []string{styleHeader},
+		},
+		{
+			name:       "params_style_accepted_after_fallback_is_reused",
+			accepts:    styleParams,
+			errCode:    "invalid_client",
+			wantFirst:  []string{styleHeader, styleParams},
+			wantSecond: []string{styleParams},
+		},
+		{
+			name:       "fallback_after_invalid_request",
+			accepts:    styleParams,
+			errCode:    "invalid_request",
+			wantFirst:  []string{styleHeader, styleParams},
+			wantSecond: []string{styleParams},
+		},
+		{
+			name:       "fallback_after_unauthorized_client",
+			accepts:    styleParams,
+			errCode:    "unauthorized_client",
+			wantFirst:  []string{styleHeader, styleParams},
+			wantSecond: []string{styleParams},
+		},
+		{
+			// A failed fallback restores the original style, in case the rejection was temporary.
+			name:       "failed_fallback_keeps_the_original_style",
+			errCode:    "invalid_client",
+			wantFirst:  []string{styleHeader, styleParams},
+			wantSecond: []string{styleHeader, styleParams},
+			wantErr:    true,
+		},
+		{
+			name:       "other_oauth_errors_are_not_retried",
+			accepts:    styleParams,
+			errCode:    "invalid_grant",
+			wantFirst:  []string{styleHeader},
+			wantSecond: []string{styleHeader},
+			wantErr:    true,
+		},
+		{
+			name:       "public_client_is_not_retried",
+			noSecret:   true,
+			errCode:    "invalid_client",
+			wantFirst:  []string{stylePlain},
+			wantSecond: []string{stylePlain},
+			wantErr:    true,
+		},
+		{
+			name:       "public_client_accepted",
+			noSecret:   true,
+			accepts:    stylePlain,
+			wantFirst:  []string{stylePlain},
+			wantSecond: []string{stylePlain},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var mu sync.Mutex
+			var styles []string
+			endpoint := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				_ = r.ParseForm() // Missing fields are detected by the style checks below.
+				style := stylePlain
+				switch {
+				case r.Header.Get("Authorization") != "":
+					style = styleHeader
+				case r.PostForm.Get("client_secret") != "":
+					style = styleParams
+				}
+				mu.Lock()
+				styles = append(styles, style)
+				mu.Unlock()
+
+				status, body := http.StatusOK, `{"access_token":"t0k3n","token_type":"Bearer","expires_in":3600}`
+				if style != tt.accepts {
+					status, body = http.StatusUnauthorized, `{"error":"`+tt.errCode+`"}`
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			ctx := context.WithValue(t.Context(), oauth2.HTTPClient, &http.Client{Transport: endpoint})
+			src := newTestJWTSource(ctx, t, testTokenURL)
+			src.clientID = "id"
+			if !tt.noSecret {
+				src.clientSecret = "secret"
+			}
+
+			for i, want := range [][]string{tt.wantFirst, tt.wantSecond} {
+				mu.Lock()
+				styles = nil
+				mu.Unlock()
+
+				if _, err := src.Token(); (err != nil) != tt.wantErr {
+					t.Errorf("jwtTokenSource.Token() #%d error = %v, wantErr %v", i+1, err, tt.wantErr)
+				}
+				mu.Lock()
+				got := slices.Clone(styles)
+				mu.Unlock()
+				if !slices.Equal(got, want) {
+					t.Errorf("jwtTokenSource.Token() #%d client authentication styles = %v, want %v", i+1, got, want)
+				}
+			}
+		})
+	}
+}
+
+// Once a client authentication style has worked, it's final: a later rejection is reported
+// as it is, without retrying the other style, because it can't be a style mismatch anymore.
+func TestJWTTokenSourceAuthStyleIsFinalAfterSuccess(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		acceptsIn bool // Whether the endpoint accepts the client credentials in the form instead of the header.
+		successes int  // How many requests succeed before the endpoint starts rejecting all of them.
+	}{
+		{name: "header_once", successes: 1},
+		{name: "header_twice", successes: 2}, // Catches a flag that toggles instead of staying set.
+		{name: "header_three_times", successes: 3},
+		{name: "params_once", acceptsIn: true, successes: 1},
+		{name: "params_twice", acceptsIn: true, successes: 2},
+		{name: "params_three_times", acceptsIn: true, successes: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var requests, accepted int
+			endpoint := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests++
+				_ = r.ParseForm()
+				inHeader := r.Header.Get("Authorization") != ""
+				status, body := http.StatusUnauthorized, `{"error":"invalid_client"}`
+				if accepted < tt.successes && inHeader == !tt.acceptsIn {
+					accepted++
+					status, body = http.StatusOK, `{"access_token":"t0k3n","token_type":"Bearer","expires_in":3600}`
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			ctx := context.WithValue(t.Context(), oauth2.HTTPClient, &http.Client{Transport: endpoint})
+			src := newTestJWTSource(ctx, t, testTokenURL)
+			src.clientID, src.clientSecret = "id", "secret"
+
+			for i := range tt.successes {
+				if _, err := src.Token(); err != nil {
+					t.Fatalf("jwtTokenSource.Token() #%d error = %v", i+1, err)
+				}
+			}
+			before := requests
+			if _, err := src.Token(); err == nil {
+				t.Fatal("jwtTokenSource.Token() after the endpoint started rejecting: error = nil, want an error")
+			}
+			if got := requests - before; got != 1 {
+				t.Errorf("rejected Token() sent %d requests, want 1 (no fallback after a success)", got)
+			}
+		})
+	}
+}
+
+// Tokens never expire immediately or never at all: a missing, invalid, or non-positive "expires_in" is replaced
+// by a default lifetime, and enormous ones are clamped. Otherwise, the token would be requested again for every
+// use (or never refreshed), because [oauth2.Token.Valid] treats an already-expired token as invalid.
+func TestExchangeJWTTokenLifetime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		expiresIn string // A JSON member (with a leading comma) to add to the token response, or empty.
+		want      time.Duration
+	}{
+		{"seconds", `,"expires_in":120`, 2 * time.Minute},
+		{"numeric_string", `,"expires_in":" 120 "`, 2 * time.Minute},
+		{"one_hour", `,"expires_in":3600`, time.Hour},
+		{"longer_than_the_default", `,"expires_in":86400`, 24 * time.Hour},
+		{"longer_numeric_string", `,"expires_in":"86400"`, 24 * time.Hour},
+		{"clamped_number", `,"expires_in":10000000000`, time.Duration(maxExpiresIn) * time.Second},
+		{"clamped_max_int", `,"expires_in":9223372036854775807`, time.Duration(maxExpiresIn) * time.Second},
+		{"clamped_float", `,"expires_in":1e30`, time.Duration(maxExpiresIn) * time.Second},
+		{"clamped_numeric_string", `,"expires_in":"9223372036854775807"`, time.Duration(maxExpiresIn) * time.Second},
+		{"clamped_out_of_range_string", `,"expires_in":"99999999999999999999"`, time.Duration(maxExpiresIn) * time.Second},
+		{"missing", ``, time.Hour},
+		{"zero", `,"expires_in":0`, time.Hour},
+		{"negative_float", `,"expires_in":-1e30`, time.Hour},
+		{"negative", `,"expires_in":-5`, time.Hour},
+		{"fraction_below_one_second", `,"expires_in":0.5`, time.Hour},
+		{"min_int_string", `,"expires_in":"-9223372036854775808"`, time.Hour},
+		{"min_int", `,"expires_in":-9223372036854775808`, time.Hour},
+		{"negative_out_of_range_string", `,"expires_in":"-99999999999999999999"`, time.Hour},
+		{"zero_string", `,"expires_in":"0"`, time.Hour},
+		{"invalid_string", `,"expires_in":"soon"`, time.Hour},
+		{"invalid_type", `,"expires_in":true`, time.Hour},
+		{"null", `,"expires_in":null`, time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			endpoint := &fakeTokenEndpoint{status: http.StatusOK, body: `{"access_token":"t0k3n"` + tt.expiresIn + `}`}
+			src := newTestJWTSource(t.Context(), t, testTokenURL)
+			token, _, err := src.exchangeJWT(&http.Client{Transport: endpoint})
+			if err != nil {
+				t.Fatalf("jwtTokenSource.exchangeJWT() error = %v", err)
+			}
+
+			if !token.Valid() {
+				t.Error("jwtTokenSource.exchangeJWT() token is expired as soon as it's issued")
+			}
+			if remaining := time.Until(token.Expiry); remaining > tt.want || remaining < tt.want-5*time.Second {
+				t.Errorf("jwtTokenSource.exchangeJWT() token expires in %v, want about %v", remaining, tt.want)
+			}
 		})
 	}
 }

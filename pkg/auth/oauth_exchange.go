@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -143,9 +144,13 @@ const (
 	jwtMaxAttempts = 3
 	jwtRetryDelay  = time.Second
 
-	// MaxTokenResponseSize is the same limit that [golang.org/x/oauth2] applies to token responses,
-	// except that larger responses fail explicitly, instead of being truncated before parsing.
+	// The same limit that [golang.org/x/oauth2] applies to token responses, except
+	// that larger responses fail explicitly, instead of being truncated before parsing.
 	maxTokenResponseSize = 1 << 20 // 1 MiB.
+
+	// The maximum number of seconds that can fit in a [time.Duration]. Anything greater than that would overflow
+	// and expire immediately (e.g., some identity providers use huge values for tokens that should never expire).
+	maxExpiresIn = float64(math.MaxInt64 / time.Second)
 )
 
 type jwtTokenSource struct {
@@ -155,6 +160,7 @@ type jwtTokenSource struct {
 	clientID     string
 	clientSecret string
 	authStyle    oauth2.AuthStyle
+	probeDone    bool
 
 	method jwt.SigningMethod
 	claims map[string]any
@@ -165,11 +171,14 @@ type jwtTokenSource struct {
 func (j *jwtTokenSource) Token() (*oauth2.Token, error) {
 	switch {
 	case j.authStyle != oauth2.AuthStyleAutoDetect:
-		// Already initialized, skip this switch block.
+		// Already started or finished auth-style probing, skip this switch block.
 	case j.clientID == "" || j.clientSecret == "":
-		j.authStyle = -1 // Never send client credentials at all.
+		j.authStyle = -1 // Nothing to probe, can't send a client secret anyway.
+		j.probeDone = true
 	default:
-		j.authStyle = oauth2.AuthStyleInHeader // The first choice of [oauth2.AuthStyleAutoDetect].
+		// The first choice of [oauth2.AuthStyleAutoDetect], which is the mode
+		// that all servers are required to support (per RFC 6749 §2.3.1).
+		j.authStyle = oauth2.AuthStyleInHeader
 	}
 
 	client, ok := j.ctx.Value(oauth2.HTTPClient).(*http.Client)
@@ -177,6 +186,20 @@ func (j *jwtTokenSource) Token() (*oauth2.Token, error) {
 		return nil, errors.New("HTTP client not found in context for JWT exchange")
 	}
 	token, _, err := j.exchangeJWT(client)
+	j.probeDone = j.probeDone || err == nil // This is a one-way transition, subsequent errors won't reset this flag.
+
+	if retErr, ok := errors.AsType[*oauth2.RetrieveError](err); ok && !j.probeDone && j.authStyle == oauth2.AuthStyleInHeader {
+		switch retErr.ErrorCode {
+		case "invalid_request", "invalid_client", "unauthorized_client": // See RFC 6749 §5.2.
+			j.authStyle = oauth2.AuthStyleInParams // Try the other style once.
+			if token, _, err = j.exchangeJWT(client); err != nil {
+				// Try the first default mode again next time, in case there's a temporary general outage.
+				j.authStyle = oauth2.AuthStyleInHeader
+			} else {
+				j.probeDone = true
+			}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange JWT into OAuth token: %w", err)
 	}
@@ -185,7 +208,8 @@ func (j *jwtTokenSource) Token() (*oauth2.Token, error) {
 }
 
 // exchangeJWT sends to an OAuth token endpoint a POST request which contains (at least) a signed JWT,
-// in order to obtain an OAuth access token, and potentially an OpenID Connect (OIDC) ID token.
+// in order to obtain an OAuth access token, and potentially an OpenID Connect (OIDC) ID token. OAuth
+// tokens without (or with invalid) expiration values get a default lifetime of [maxJWTExpiration].
 func (j *jwtTokenSource) exchangeJWT(client *http.Client) (*oauth2.Token, *jwt.Token, error) {
 	var body []byte
 	var status int
@@ -214,7 +238,7 @@ func (j *jwtTokenSource) exchangeJWT(client *http.Client) (*oauth2.Token, *jwt.T
 		return nil, nil, fmt.Errorf("received invalid OAuth token: %w", err)
 	}
 
-	// OAuth error response (RFC 6749 section 5.2), the same error type as in [golang.org/x/oauth2]'s own grants.
+	// OAuth error response (RFC 6749 §5.2), the same error type as in [golang.org/x/oauth2]'s own grants.
 	if errCode := extract[string](parsed, "error"); errCode != "" {
 		return nil, nil, &oauth2.RetrieveError{
 			ErrorCode:        errCode,
@@ -232,13 +256,10 @@ func (j *jwtTokenSource) exchangeJWT(client *http.Client) (*oauth2.Token, *jwt.T
 		TokenType:    extract[string](parsed, "token_type"),
 		RefreshToken: extract[string](parsed, "refresh_token"),
 		ExpiresIn:    expiresIn(parsed),
-		Expiry:       time.Time{},
 	}
+	token.Expiry = time.Now().UTC().Add(time.Duration(token.ExpiresIn) * time.Second)
 	if token.AccessToken == "" {
-		return nil, nil, errors.New("response from OAuth token endpoint missing an access token")
-	}
-	if token.ExpiresIn > 0 {
-		token.Expiry = time.Now().UTC().Add(time.Duration(token.ExpiresIn) * time.Second)
+		return nil, nil, errors.New("response from OAuth token endpoint is missing an access token")
 	}
 
 	// OIDC (optional).
@@ -265,7 +286,7 @@ func (j *jwtTokenSource) requestToken(client *http.Client) ([]byte, int, error) 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if j.authStyle == oauth2.AuthStyleInHeader {
-		// Form-URL-encode first, per RFC 6749 section 2.3.1.
+		// Form-URL-encode first, per RFC 6749 §2.3.1.
 		req.SetBasicAuth(url.QueryEscape(j.clientID), url.QueryEscape(j.clientSecret))
 	}
 
@@ -279,7 +300,7 @@ func (j *jwtTokenSource) requestToken(client *http.Client) ([]byte, int, error) 
 	if resp.StatusCode >= http.StatusBadRequest {
 		oauthErr = errors.New("OAuth token endpoint returned an error: " + resp.Status)
 	}
-	// OAuth error responses have a 400 or 401 status, and a well-defined body (RFC 6749 section 5.2).
+	// OAuth error responses have a 400 or 401 status, and a well-defined body (RFC 6749 §5.2).
 	if resp.StatusCode > http.StatusUnauthorized {
 		return nil, resp.StatusCode, oauthErr
 	}
@@ -317,7 +338,6 @@ func (j *jwtTokenSource) generateJWT() (io.Reader, error) {
 	if j.clientID != "" {
 		form.Set("client_id", j.clientID)
 	}
-	// Reminder: add a one-time probe, like in [oauth2.Config.Exchange], to enable this auth style.
 	if j.authStyle == oauth2.AuthStyleInParams {
 		form.Set("client_secret", j.clientSecret)
 	}
@@ -361,17 +381,27 @@ func extract[T any](m map[string]any, key string) T {
 	return zero
 }
 
-// This should be a JSON number (according to RFC 6749 section 5.1), but some identity providers send it as a numeric
+// This should be a JSON number (according to RFC 6749 §5.1), but some identity providers send it as a numeric
 // string, which [golang.org/x/oauth2] accepts too. Otherwise, the token would never expire (and never be refreshed).
+// OAuth tokens without (or with invalid) expiration values get a default lifetime of [maxJWTExpiration].
 func expiresIn(m map[string]any) int64 {
-	if n := extract[float64](m, "expires_in"); n != 0 {
-		return int64(n)
-	}
-	if s, ok := m["expires_in"].(string); ok {
-		if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+	var secs int64
+	switch t := m["expires_in"].(type) {
+	case float64:
+		// Clamp before converting: out-of-range float-to-integer conversions are implementation-specific
+		// (e.g., int64(float64(1e30)) < 0 on amd64, in contrast to the "infinite lifetime" expectation).
+		// See https://github.com/golang/go/issues/26487 for a detailed discussion.
+		secs = int64(min(max(t, 0), maxExpiresIn))
+		delete(m, "expires_in")
+	case string:
+		// Out-of-range numbers are returned as the closest limit, together with [strconv.ErrRange].
+		if n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+			secs = min(n, int64(maxExpiresIn))
 			delete(m, "expires_in")
-			return n
 		}
 	}
-	return 0
+	if secs <= 0 { // Missing, invalid, or non-positive value.
+		secs = int64(maxJWTExpiration.Seconds())
+	}
+	return secs
 }

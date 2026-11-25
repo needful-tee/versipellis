@@ -33,7 +33,7 @@ In local sessions, show review findings in the terminal; post them to GitHub onl
 
 ## Collaboration
 
-- The author often edits files concurrently: treat the current on-disk state as intentional, never revert the author's changes without asking, and point out problems in them instead. One exception to this rule: fixing newly broken/stale tests is fine.
+- The author often edits files concurrently: treat the current on-disk state as intentional, never revert the author's changes without asking, but point out problems in them instead. One exception to this rule: fixing new bugs and broken/stale tests is fine.
 - Only staged changes are reviewable: when asked to review, use `git diff --cached` and `git show :<path>`, and ignore unstaged and untracked files.
 - Never commit unless explicitly asked.
 
