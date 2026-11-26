@@ -10,7 +10,9 @@ This is the high-level plan for features that are expected to be released within
 
 3. Support session cookies (RFC 6265) in OAuth-based HTTP authentication and authorization
 
-4. Sharing and single-flight initialization of identical OAuth configurations across clients
+4. HTTP 401 responses to OAuth-based collector/sender requests should trigger a token refresh
+
+5. Sharing and single-flight initialization of identical OAuth configurations across clients
 
 ## 3-6 Months
 
