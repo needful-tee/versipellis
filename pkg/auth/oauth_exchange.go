@@ -114,6 +114,11 @@ func (ow *oauthWebhook) exchangeHandler(ctx context.Context, cfg *Config) http.H
 			ow.result <- false
 			return
 		}
+		if token.RefreshToken == "" && !token.Expiry.IsZero() {
+			slog.Warn("OAuth access token can't be refreshed after it expires (no refresh token was issued)",
+				slog.Time("expiry", token.Expiry),
+			) // E.g., oauth_auth_params = { access_type = "offline" }, or an offline scope.
+		}
 
 		// Same as above, the [oauth2.TokenSource] in [newSharedTokenSource] requires a long-lived
 		// context that includes an embedded [http.Client] value under the [oauth2.HTTPClient] key.
@@ -192,11 +197,13 @@ func (j *jwtTokenSource) Token() (*oauth2.Token, error) {
 		switch retErr.ErrorCode {
 		case "invalid_request", "invalid_client", "unauthorized_client": // See RFC 6749 §5.2.
 			j.authStyle = oauth2.AuthStyleInParams // Try the other style once.
-			if token, _, err = j.exchangeJWT(client); err != nil {
+			retryToken, _, retryErr := j.exchangeJWT(client)
+			if retryErr != nil {
+				err = errors.Join(err, fmt.Errorf("retry with client credentials in the request body: %w", retryErr))
 				// Try the first default mode again next time, in case there's a temporary general outage.
 				j.authStyle = oauth2.AuthStyleInHeader
 			} else {
-				j.probeDone = true
+				token, err, j.probeDone = retryToken, nil, true
 			}
 		}
 	}

@@ -196,6 +196,12 @@ func (c *Config) checkJWTClaims(name string) error {
 	if len(mc) == 0 {
 		return fmt.Errorf(`"jwt_claims" is required for OAuth grant type %q`, c.grant)
 	}
+	// An array of scopes becomes a space-delimited string (RFC 6749 §3.3), the same as "oauth_scopes", so it's also
+	// sent as the "scope" parameter of the token request (see [jwtTokenSource.generateJWT]), and it overrides them.
+	if arr, ok := mc["scope"].([]any); ok {
+		scopes, _ := scopesFromValue(arr, "jwt_claims.scope", name)
+		mc["scope"] = strings.Join(scopes, " ")
+	}
 	if _, ok := mc["scope"]; !ok && len(c.oauthConfig.Scopes) > 0 {
 		mc["scope"] = strings.Join(c.oauthConfig.Scopes, " ")
 	}

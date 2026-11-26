@@ -129,6 +129,8 @@ func (c *Config) checkOAuthConfig(name string) error {
 	switch {
 	case c.grant != grantTypeJWTBearer && c.oauthConfig.ClientID == "":
 		return fmt.Errorf(`"oauth_client_id" is required for grant type %q`, c.grant)
+	case c.oauthConfig.ClientID == "" && c.oauthConfig.ClientSecret != "":
+		return errors.New(`"oauth_client_id" is required when "oauth_client_secret" is set`)
 
 	case c.grant == grantTypeAuthCode && !c.oauthPKCE && c.oauthConfig.ClientSecret == "":
 		return fmt.Errorf(`"oauth_client_secret" is required for non-PKCE %q grant type`, c.grant)
@@ -212,27 +214,30 @@ func isLoopback(host string) bool {
 }
 
 func parseOAuthScopes(cfg map[string]any, name string) ([]string, error) {
-	anyValue, found := cfg["oauth_scopes"]
+	v, found := cfg["oauth_scopes"]
 	if !found {
 		return nil, nil
 	}
+	return scopesFromValue(v, "oauth_scopes", name)
+}
 
+func scopesFromValue(value any, key, name string) ([]string, error) {
 	var scopes []string
-	switch typedValue := anyValue.(type) {
+	switch t := value.(type) {
 	case string:
-		scopes = append(scopes, strings.Fields(typedValue)...)
+		scopes = append(scopes, strings.Fields(t)...)
 	case []any:
-		for _, v := range typedValue {
+		for _, v := range t {
 			if s, ok := v.(string); ok {
 				scopes = append(scopes, strings.Fields(s)...)
 				continue
 			}
-			slog.Warn("skipping non-string value in OAuth scopes array",
-				slog.String("name", name), slog.String("type", fmt.Sprintf("%T", v)),
+			slog.Warn("skipping non-string value in OAuth scopes array", slog.String("name", name),
+				slog.String("key", key), slog.String("type", fmt.Sprintf("%T", v)),
 			)
 		}
 	default:
-		return nil, fmt.Errorf("'oauth_scopes' must be a string or an array of strings, got %T", anyValue)
+		return nil, fmt.Errorf("'%s' must be a string or an array of strings, got %T", key, t)
 	}
 
 	return scopes, nil

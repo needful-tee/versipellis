@@ -707,6 +707,25 @@ func TestParseConfig(t *testing.T) {
 			}(),
 		},
 		{
+			name: "jwt_bearer_scope_claim_array_becomes_string_and_overrides_oauth_scopes",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"oauth_scopes":         "read write",
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims": map[string]any{
+					"iss": "issuer", "sub": "subject", "aud": "audience", "scope": []any{"custom", "other thing"},
+				},
+			},
+			want: func() Config {
+				c := jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration,
+					jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "custom other thing"},
+				)
+				c.oauthConfig.Scopes = []string{"read", "write"}
+				return c
+			}(),
+		},
+		{
 			name: "jwt_bearer_oauth_scopes_set_missing_scope_claim",
 			cfg: map[string]any{
 				"type":                 "oauth",

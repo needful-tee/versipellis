@@ -933,6 +933,31 @@ func TestJWTTokenSourceAuthStyleFallback(t *testing.T) {
 	}
 }
 
+// When both client authentication styles are rejected, the error of the first attempt is kept (and comes first),
+// because the other server's complaint is usually about the style itself, not the actual problem (e.g., a wrong secret).
+func TestJWTTokenSourceAuthStyleFallbackKeepsFirstError(t *testing.T) {
+	t.Parallel()
+
+	endpoint := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, status := `{"error":"invalid_request","error_description":"second"}`, http.StatusBadRequest
+		if _, _, ok := r.BasicAuth(); ok {
+			body, status = `{"error":"invalid_client","error_description":"first"}`, http.StatusUnauthorized
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	ctx := context.WithValue(t.Context(), oauth2.HTTPClient, &http.Client{Transport: endpoint})
+	src := newTestJWTSource(ctx, t, testTokenURL)
+	src.clientID, src.clientSecret = "id", "secret"
+
+	_, err := src.Token()
+	if retrieveErr, ok := errors.AsType[*oauth2.RetrieveError](err); !ok || retrieveErr.ErrorCode != "invalid_client" {
+		t.Errorf("jwtTokenSource.Token() error = %v, want the first attempt's invalid_client error", err)
+	}
+	if src.authStyle != oauth2.AuthStyleInHeader {
+		t.Errorf("jwtTokenSource.Token() left authStyle = %v, want the original style restored", src.authStyle)
+	}
+}
+
 // Once a client authentication style has worked, it's final: a later rejection is reported
 // as it is, without retrying the other style, because it can't be a style mismatch anymore.
 func TestJWTTokenSourceAuthStyleIsFinalAfterSuccess(t *testing.T) {

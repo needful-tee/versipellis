@@ -513,7 +513,7 @@ func newErrorResponse(statusCode int) *http.Response {
 	}
 }
 
-// The same as retryable() in auth/oauth_exchange.go, but generic HTTP and OAuth-specific may diverge in the future.
+// The same as retryable() in auth/oauth_exchange.go, but generic HTTP and OAuth policies may diverge in the future.
 func retryable(status int) bool {
 	switch status {
 	// Allow-list of retryable 4xx codes.
