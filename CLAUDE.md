@@ -13,6 +13,8 @@ When running in GitHub Actions to review a PR:
 - Then submit one review with the summary and verdict as its body, passed through a quoted heredoc so
   backticks and `$` survive: `gh pr review <n> --approve --body-file - <<'EOF'` (or `--request-changes`).
   Don't also post a separate summary comment.
+- Keep the tracking comment (when there is one) to progress and a one-line outcome that points to your review:
+  the findings and the verdict belong in the review, not in both.
 - On later runs, first read earlier reviews and threads: `gh pr view <n> --json reviews,comments`
   and `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate`, and don't repeat findings.
   - After a push (`TRIGGER: synchronize`), review the changes since the commit of your last review

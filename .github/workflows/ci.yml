@@ -24,7 +24,7 @@ jobs:
         run: go build -v ./cmd/versi
       - name: Test
         run: |
-          go install gotest.tools/gotestsum@c4a0df2e75a225d979a444342dd3db752b53619f # v1.13.0
+          go install gotest.tools/gotestsum@c4a0df2e75a225d979a444342dd3db752b53619f # v1.13.0 (not updated by Dependabot)
           gotestsum -f github-actions --junitfile junit.xml -- -race -coverprofile=coverage.out ./pkg/...
 
       - name: Lint

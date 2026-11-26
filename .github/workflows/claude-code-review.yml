@@ -18,9 +18,21 @@ concurrency:
     && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   claude-review:
     name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      actions: read
+      issues: read
+
     # Skip-marker: "[no-claude-review]" anywhere in the PR description (case-insensitive).
     if: |
       !github.event.pull_request.draft &&
@@ -29,15 +41,6 @@ jobs:
       contains(fromJSON('["OWNER", "MEMBER"]'), github.event.pull_request.author_association) &&
       (github.event.action != 'labeled' || github.event.label.name == 'claude-review') &&
       (github.event.action != 'edited' || github.event.changes.base != null)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    permissions:
-      contents: read
-      pull-requests: read
-      id-token: write
-      actions: read
-      issues: read
 
     steps:
       - name: Check out repository
@@ -54,7 +57,7 @@ jobs:
           version: latest
           install-only: true
       - name: Install gopls
-        run: go install golang.org/x/tools/gopls@latest
+        run: go install golang.org/x/tools/gopls@1f9922d1dcc5836d5c5bcb552c8fed230f885372 # v0.24.0 (not updated by Dependabot)
       - name: Prepare Go sources
         id: go-env
         run: |
@@ -72,6 +75,12 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
+
+          # Progress tracking runs the action in tag mode, with a tracking comment on the PR. The action rejects it
+          # on "edited" events, so base-branch changes are reviewed without it. A sticky comment reuses one tracking
+          # comment per PR, instead of adding one per run (including canceled runs, which leave theirs unfinished).
+          track_progress: ${{ github.event.action != 'edited' }}
+          use_sticky_comment: true
 
           plugin_marketplaces: https://github.com/anthropics/claude-plugins-official.git
           plugins: gopls-lsp@claude-plugins-official
@@ -92,10 +101,17 @@ jobs:
           # The action runs Claude in auto mode, so --allowedTools pre-approves these tools but isn't a
           # strict allow-list: other tool calls go through auto mode's safety check, which may let them run.
           # --add-dir lets Claude read the Go standard library and module sources without a safety check.
+          # --disallowedTools: tag mode allows git wrappers that commit and push to the PR branch,
+          # but reviews never change it (deny rules here cover those wrappers too).
           claude_args: |
             --model opus
             --effort high
             --add-dir "${{ steps.go-env.outputs.goroot }}" "${{ steps.go-env.outputs.gomodcache }}"
+            --disallowedTools
+              "Bash(git add:*)"
+              "Bash(git commit:*)"
+              "Bash(git push:*)"
+              "Bash(git rm:*)"
             --allowedTools
               "mcp__github_inline_comment__create_inline_comment"
               "mcp__github_ci__get_ci_status"
