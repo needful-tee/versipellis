@@ -726,6 +726,52 @@ func TestParseConfig(t *testing.T) {
 			}(),
 		},
 		{
+			name: "jwt_bearer_scope_claim_without_scopes_falls_back_to_oauth_scopes",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"oauth_scopes":         "read write",
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims": map[string]any{
+					"iss": "issuer", "sub": "subject", "aud": "audience", "scope": []any{int64(1), " "},
+				},
+			},
+			want: func() Config {
+				c := jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration,
+					jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "read write"},
+				)
+				c.oauthConfig.Scopes = []string{"read", "write"}
+				return c
+			}(),
+		},
+		{
+			name: "jwt_bearer_empty_scope_claim_array_falls_back_to_oauth_scopes",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"oauth_scopes":         "read write",
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": []any{}},
+			},
+			want: func() Config {
+				c := jwtBearerConfig(jwt.SigningMethodES256, ecKey, defaultJWTExpiration,
+					jwt.MapClaims{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": "read write"},
+				)
+				c.oauthConfig.Scopes = []string{"read", "write"}
+				return c
+			}(),
+		},
+		{
+			name: "jwt_bearer_scope_claim_with_unexpected_type",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience", "scope": int64(5)},
+			},
+			wantErr: true,
+		},
+		{
 			name: "jwt_bearer_oauth_scopes_set_missing_scope_claim",
 			cfg: map[string]any{
 				"type":                 "oauth",
@@ -1142,6 +1188,17 @@ func TestParseConfig(t *testing.T) {
 				"oauth_token_url":      testTokenURL,
 				"jwt_private_key_file": ecPKCS8File,
 				"jwt_claims":           map[string]any{"exp": int64(1e9)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "jwt_bearer_client_secret_without_client_id",
+			cfg: map[string]any{
+				"type":                 "oauth",
+				"oauth_token_url":      testTokenURL,
+				"oauth_client_secret":  "x",
+				"jwt_private_key_file": ecPKCS8File,
+				"jwt_claims":           map[string]any{"iss": "issuer", "sub": "subject", "aud": "audience"},
 			},
 			wantErr: true,
 		},

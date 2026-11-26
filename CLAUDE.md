@@ -2,7 +2,7 @@
 
 When reviewing code, commits, PRs, or diffs, read and follow [`REVIEW.md`](./REVIEW.md).
 
-# PR Reviews in GitHub Actions Workflows
+## PR Reviews in GitHub Actions Workflows
 
 - Post findings on lines in the diff as inline comments (with `confirmed: true`),
   each starting with its severity marker from `REVIEW.md`.

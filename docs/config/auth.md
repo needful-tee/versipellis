@@ -91,6 +91,7 @@ It is entirely optional, but some fields may be required in some use-cases.
 
 - Required when `type = "oauth"`, _unless_ `oauth_grant_type = "jwt_bearer"`
 - Optional when `oauth_grant_type = "jwt_bearer"`
+- Either way, required when `oauth_client_secret` is set
 
 `oauth_client_secret` - client secret for some OAuth flows
 

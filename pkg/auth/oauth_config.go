@@ -237,7 +237,7 @@ func scopesFromValue(value any, key, name string) ([]string, error) {
 			)
 		}
 	default:
-		return nil, fmt.Errorf("'%s' must be a string or an array of strings, got %T", key, t)
+		return nil, fmt.Errorf("%q must be a string or an array of strings, got %T", key, t)
 	}
 
 	return scopes, nil
