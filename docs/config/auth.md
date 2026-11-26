@@ -203,8 +203,7 @@ It is entirely optional, but some fields may be required in some use-cases.
 - Values may be of any TOML type; TOML date-times are converted to Unix timestamps (whole seconds)
   - Local date-times and dates (without a time zone offset) are in the host's local time zone, dates at midnight
   - `nbf` must be a number or a date-time (if specified), which may also be a quoted string in the same format
-  - `scope` may be a string or an array of strings (if specified), which is converted to a space-delimited string, like `oauth_scopes`;
-    either way, it overrides `oauth_scopes` and is also sent as the `scope` parameter of token requests
+  - `scope` may be a string or an array of strings (if specified), which is converted to a space-delimited string, like `oauth_scopes`; if it's not empty, it overrides `oauth_scopes` and is also sent as the `scope` parameter of token requests
 - The TOML file format supports multiple representation options for key-value pairs:
 
   ```toml
