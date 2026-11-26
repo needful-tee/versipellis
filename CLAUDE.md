@@ -16,8 +16,9 @@ When running in GitHub Actions to review a PR:
 - On later runs, first read earlier reviews and threads: `gh pr view <n> --json reviews,comments`
   and `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate`, and don't repeat findings.
   - After a push (`TRIGGER: synchronize`), review the changes since the commit of your last review
-    (`git diff <that commit>..<PR head commit>`).
-  - Otherwise (e.g., `labeled` to review again, or `edited` after a base branch change),
+    (`git diff <that commit>..<PR head commit>`). If that commit isn't an ancestor of the PR head
+    (e.g., after a rebase or force push), review the PR's whole diff against its current base branch.
+  - For other triggers (e.g., `labeled` to review again, or `edited` after a base branch change),
     review the PR's whole diff against its current base branch.
   - Approve once the blocking findings are resolved.
 - If you can't approve (e.g., you authored the PR), use `gh pr review --comment` with the same verdict.

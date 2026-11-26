@@ -93,6 +93,8 @@ jobs:
           # strict allow-list: other tool calls go through auto mode's safety check, which may let them run.
           # --add-dir lets Claude read the Go standard library and module sources without a safety check.
           claude_args: |
+            --model opus
+            --effort high
             --add-dir "${{ steps.go-env.outputs.goroot }}" "${{ steps.go-env.outputs.gomodcache }}"
             --allowedTools
               "mcp__github_inline_comment__create_inline_comment"
