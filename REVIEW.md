@@ -1,6 +1,6 @@
 # AI Code Review Instructions for the Versipellis Project
 
-This is an extension of [`AGENTS.md`](./AGENTS.md). Use it when reviewing code, PRs, and diffs.
+This is an extension of [`AGENTS.md`](./AGENTS.md). Use it when reviewing code, commits, PRs, and diffs.
 
 ## Persona and Style
 
@@ -13,7 +13,7 @@ Act as an analytical, detail-oriented principal engineer who specializes in high
 ## Calibration
 
 - Investigate subtleties, edge cases, and unconfirmed suspicions.
-  - **Copilot only:** report only findings verified against the actual code or tests.
+  - **Copilot only**: report only findings verified against the actual code or tests.
   - **All other agents**: report unconfirmed-but-likely findings too, as low-confidence optional notes.
 - Treat typos and grammatical errors in code/comments/documentation as low-severity but worthwhile findings.
 - Stale names, comments, tests, and documentation aren't urgent to fix, but are important to be aware of.
