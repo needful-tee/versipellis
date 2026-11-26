@@ -2,18 +2,27 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    # To review again without pushing, (re)add the "claude-review" label.
+    types: [opened, synchronize, ready_for_review, reopened, labeled]
 
+# A push or a "claude-review" label cancels the PR's review in progress (it's reviewing outdated code).
+# Other labels get a group of their own, so their runs (whose job is skipped) don't cancel it.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: >-
+    claude-review-${{ github.event.pull_request.number }}${{
+    github.event.action == 'labeled' && github.event.label.name != 'claude-review' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
   claude-review:
     name: Claude review
+    # Skip-marker: "[no-claude-review]" anywhere in the PR description (case-insensitive).
     if: |
       !github.event.pull_request.draft &&
-      contains(fromJSON('["OWNER", "MEMBER"]'), github.event.pull_request.author_association)
+      !contains(github.event.pull_request.body, '[no-claude-review]') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER"]'), github.event.pull_request.author_association) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'claude-review')
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

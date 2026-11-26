@@ -6,9 +6,10 @@ When reviewing code, commits, PRs, or diffs, read and follow [`REVIEW.md`](./REV
 
 When running in GitHub Actions to review a PR:
 
-- Post findings on lines in the diff as inline comments, each starting with its severity marker from `REVIEW.md`.
-- Everything else goes in the review body: findings elsewhere, low-confidence notes, and suggestions for
-  `AGENTS.md` and `REVIEW.md`.
+- Post findings on lines in the diff as inline comments (with `confirmed: true`),
+  each starting with its severity marker from `REVIEW.md`.
+- Everything else goes in the review body: findings elsewhere, low-confidence notes,
+  and suggestions for `AGENTS.md` and `REVIEW.md`.
 - Then submit one review with the summary and verdict as its body, passed through a quoted heredoc so
   backticks and `$` survive: `gh pr review <n> --approve --body-file - <<'EOF'` (or `--request-changes`).
   Don't also post a separate summary comment.
