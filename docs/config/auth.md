@@ -51,18 +51,18 @@ It is entirely optional, but some fields may be required in some use-cases.
 - Required when `type = "static"`
 - Has no effect otherwise
 
-**Example 1:** static bearer token (based on [RFC 6750](https://datatracker.ietf.org/doc/html/rfc6750), but without any OAuth flow)
+**Example 1**: static bearer token (based on [RFC 6750](https://datatracker.ietf.org/doc/html/rfc6750), but without any OAuth flow)
 
 - `static_secret = "..."`
 - Resulting HTTP header: `Authorization: Bearer ...`
 
-**Example 2:** Splunk HEC (based on [Splunk documentation](https://help.splunk.com/en?resourceId=Splunk_Data_UsetheHTTPEventCollector))
+**Example 2**: Splunk HEC (based on [Splunk documentation](https://help.splunk.com/en?resourceId=Splunk_Data_UsetheHTTPEventCollector))
 
 - `static_prefix = "Splunk"`
 - `static_secret = "..."`
 - Resulting HTTP header: `Authorization: Splunk ...`
 
-**Example 3:** legacy Anthropic API (based on [Claude API documentation](https://platform.claude.com/docs/en/manage-claude/authentication))
+**Example 3**: legacy Anthropic API (based on [Claude API documentation](https://platform.claude.com/docs/en/manage-claude/authentication))
 
 - `static_header = "x-api-key"`
 - `static_prefix = ""`

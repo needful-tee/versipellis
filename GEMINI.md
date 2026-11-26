@@ -2,7 +2,7 @@
 
 Follow [`AGENTS.md`](./AGENTS.md) for architecture, coding practices, and concurrency invariants.
 
-When reviewing code, PRs, or diffs, read and follow [`REVIEW.md`](./REVIEW.md) as well.
+When reviewing code, commits, PRs, or diffs, read and follow [`REVIEW.md`](./REVIEW.md) as well.
 
 ## Antigravity Environment Guidelines
 
