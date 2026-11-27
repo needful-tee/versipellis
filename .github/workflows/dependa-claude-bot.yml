@@ -99,8 +99,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The job's read-only token, instead of the action's own GitHub App token (which can write).
-          # Keep it: without it, the action also revokes its app token in a later step that runs `bun`,
-          # which would read a `bunfig.toml` that Claude could have planted.
           github_token: ${{ github.token }}
 
           prompt: |
