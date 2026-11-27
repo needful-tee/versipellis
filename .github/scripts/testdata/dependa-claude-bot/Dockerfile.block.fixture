@@ -1,0 +1,6 @@
+# @MARKER@, check latest versions at: https://example.com/tool/releases
+ARG TOOL_VERSION=1.2.3
+ARG TOOL_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+ARG OTHER_PORT=8080
+FROM scratch

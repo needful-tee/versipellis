@@ -5,15 +5,17 @@ name: Dependa-Claude-Bot
 #
 # Two jobs, so the one that reads untrusted web content has no write access:
 #   1. `check`: read-only token. Claude looks for newer versions and edits the files in the checkout.
-#      The result leaves the job as a patch (an artifact).
-#   2. `open-pr`: write token, no Claude. It verifies that the patch only touches marked files,
-#      and only changes version numbers and commit SHAs on marked lines, then commits it to a new
-#      branch (through the API, so that GitHub signs the commit) and opens the pull request.
+#      The changed files leave the job as an artifact. No git runs after Claude in this job, because
+#      Claude's file tools could have changed the config, attributes, or hooks that git reads.
+#   2. `open-pr`: write token, no Claude. It copies the changed files over a fresh checkout (only files
+#      that carry the marker there), verifies that only version numbers and commit SHAs changed, and only
+#      on marked lines, and that each new `go install` SHA is its version's tag commit. Then it commits
+#      to a new branch (through the API, so that GitHub signs the commit) and opens the pull request.
 #
-# Residual risk: `check` runs Claude on untrusted input, so a successful prompt injection could run code in
-# that job, e.g., through `$GITHUB_ENV` (the "Collect the changes" step is hardened against that, but not the
-# upload action) or by writing to this branch's Actions cache scope (which `setup-go` restores in `ci.yml`).
-# Giving workflows that hold secrets `cache: false` would close the latter, at the cost of slower runs.
+# Residual risk: `check` runs Claude on untrusted input, and auto mode doesn't strictly enforce the Bash
+# allow-list. So a successful prompt injection could run code in that job, e.g., to write to this branch's
+# Actions cache scope (which `setup-go` restores in `ci.yml`). Giving workflows that hold secrets
+# `cache: false` would close that path, at the cost of slower runs.
 #
 # `open-pr` writes with a short-lived token of a GitHub App that this repository owns, because:
 #   - The default `GITHUB_TOKEN` (and the Claude GitHub App) can't change files under `.github/workflows`.
@@ -68,13 +70,21 @@ jobs:
           fi
           mkdir -p "${RUNNER_TEMP}/pr"
 
+          # Copies of the marked files, so that "Collect the changes" can find changes without git.
+          while IFS= read -r f; do
+            if [ -n "$f" ]; then install -D -m 644 -- "$f" "${RUNNER_TEMP}/orig/${f}"; fi
+          done <<< "$files"
+
+          # The runner's work directory (parent of `_temp` and `_actions`), for Claude's deny rules.
+          echo "work_dir=$(dirname "$RUNNER_TEMP")" >> "$GITHUB_OUTPUT"
+
       - name: Skip if a previous run's PR is still open
         id: open-pr
         if: steps.marked.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
+          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json headRefName \
             --jq '[.[] | select(.headRefName | startswith("dependa-claude-bot/"))] | length')
           if [ "$open" -gt 0 ]; then
             echo "::notice::A Dependa-Claude PR is still open: merge or close it first."
@@ -110,8 +120,10 @@ jobs:
             4. Tools and actions pinned by commit SHA with a `# vX.Y.Z` comment: update the SHA and the comment.
                The SHA must be the commit that the tag points to: if `gh api repos/OWNER/REPO/git/ref/tags/TAG`
                returns an object of type "tag", follow its URL to the commit. Verify the final SHA with
-               `gh api repos/OWNER/REPO/commits/SHA`. Go modules that live in a subdirectory of a
-               repository are tagged with a prefix (e.g., `gopls/v0.24.0` in `golang/tools`).
+               `gh api repos/OWNER/REPO/commits/SHA`. Go modules that live in a subdirectory of a repository are
+               tagged with a prefix (e.g., `gopls/v0.24.0` in `golang/tools`). For `go install` pins, the SHA
+               must also equal `.Origin.Hash` in `curl -sSf https://proxy.golang.org/MODULE/@v/VERSION.info`
+               (a later job rejects it otherwise).
             5. Versions pinned by a tag or version number only (e.g., `ref: v2.3.14`): use the newest stable tag
                that passes rules 1-3 (ignore tags like `v2.3.14pre`, `-rc1`, or `-pre.1`), and verify that it
                exists with `gh api repos/OWNER/REPO/git/ref/tags/TAG`.
@@ -130,9 +142,14 @@ jobs:
             Client (`Dockerfile.package`) aren't built by CI: they only run when a release is published, and a
             new unixODBC version may break the `sed` and libtool workarounds in `Dockerfile.release`.
 
-            If nothing needs an update, change nothing, and write no files except, when there's something worth
-            knowing (e.g., a newer major version exists, or a newer version is still in its cooldown period),
-            `${{ runner.temp }}/pr/summary.md`: a few markdown lines for the workflow run's summary page.
+            If you couldn't check a pinned version (e.g., a page, download, or API call failed, or the results were
+            ambiguous), write `${{ runner.temp }}/pr/errors.md`: one markdown list item per pin, saying what failed.
+            This makes the workflow run fail, so that it isn't mistaken for "nothing to update". Still apply (and
+            describe) the updates that you could verify.
+
+            If nothing needs an update, change nothing, and write no files except `errors.md` (if needed) and, when
+            there's something worth knowing (e.g., a newer major version exists, or a newer version is still in its
+            cooldown period), `${{ runner.temp }}/pr/summary.md`: a few markdown lines for the run's summary page.
 
             Otherwise, also write (outside the repository):
             - `${{ runner.temp }}/pr/title.txt`: a single-line PR title. Follow the style of Dependabot's commits
@@ -152,11 +169,13 @@ jobs:
           # This is lookup-and-edit work with explicit rules, so Sonnet at medium effort should be enough.
           # The action runs Claude in auto mode, so --allowedTools pre-approves these tools but isn't a strict
           # allow-list: other tool calls go through auto mode's safety check, which may let them run. Don't treat
-          # it as a sandbox. The real boundaries are this job's read-only token and the patch guard in `open-pr`.
+          # it as a sandbox. The real boundaries are this job's read-only token and the checks in `open-pr`.
           # The prefix rules are loose too (e.g., `Bash(git grep:*)` also matches `git grep -O<cmd>`).
-          # Edit and Write aren't path-restricted, except by the two deny rules below (deny rules do hold in auto
-          # mode, but only for these file tools, not for Bash): `open-pr` rejects patches that touch unmarked
-          # files, or that change anything but version numbers and commit SHAs on marked lines.
+          # Edit and Write aren't path-restricted, except by the deny rules below (deny rules do hold in auto mode,
+          # but only for these file tools, not for Bash). They keep the file tools away from what runs later in
+          # this job: the runner's command files (`$GITHUB_ENV`, etc.), the actions' code, and git's config.
+          # `open-pr` ignores files that aren't marked, and rejects changes other than version numbers and
+          # commit SHAs on marked lines.
           claude_args: |
             --model sonnet
             --effort medium
@@ -170,6 +189,7 @@ jobs:
               "WebFetch(domain:www.oracle.com)"
               "WebFetch(domain:download.oracle.com)"
               "Bash(curl -sSfI https://download.oracle.com/:*)"
+              "Bash(curl -sSf https://proxy.golang.org/:*)"
               "Bash(gh api repos/:*)"
               "Bash(date:*)"
               "Bash(git grep:*)"
@@ -183,35 +203,50 @@ jobs:
               "Bash(git push:*)"
               "Bash(gh pr:*)"
               "Edit(.git/**)"
-              "Edit(//home/runner/work/_temp/_runner_file_commands/**)"
+              "Edit(~/.gitconfig)"
+              "Edit(~/.config/git/**)"
+              "Edit(/${{ runner.temp }}/_runner_file_commands/**)"
+              "Edit(/${{ steps.marked.outputs.work_dir }}/_actions/**)"
 
       - name: Collect the changes
         id: patch
         if: steps.claude.outcome == 'success'
-        # Claude's step can change what later steps run with (through `$GITHUB_ENV`, `$GITHUB_PATH`, or the
-        # repository's own files), so this step starts a clean shell: no inherited `BASH_ENV`, `LD_*`, `GIT_*`,
-        # or custom `PATH`, and the repository's git config, hooks, and attributes are reset below.
+        # No git here (see the header): this step only compares and copies regular files, and `open-pr` checks
+        # everything again. It starts its shell by absolute paths, with a fixed `PATH` and without `BASH_ENV`,
+        # and privileged mode (`-p`) makes bash ignore functions exported through the environment.
         shell: >-
-          env -u BASH_ENV -u LD_PRELOAD -u LD_LIBRARY_PATH -u GIT_DIR -u GIT_WORK_TREE -u GIT_EXTERNAL_DIFF
-          -u GIT_CONFIG_COUNT -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM PATH=/usr/local/bin:/usr/bin:/bin
-          bash --noprofile --norc -eo pipefail {0}
+          /usr/bin/env -u BASH_ENV -u ENV -u LD_PRELOAD -u LD_LIBRARY_PATH -u LD_AUDIT PATH=/usr/bin:/bin
+          /bin/bash --noprofile --norc -p -eo pipefail {0}
         run: |
-          if [ -s "${RUNNER_TEMP}/pr/summary.md" ]; then
-            cat "${RUNNER_TEMP}/pr/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          cd '${{ github.workspace }}'
+          temp='${{ runner.temp }}'
+          if [ -s "${temp}/pr/summary.md" ]; then
+            cat "${temp}/pr/summary.md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # `git diff` can run commands from the repository's config (filters, external diff, fsmonitor, hooks).
-          printf '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n' > .git/config
-          rm -rf .git/hooks .git/info/attributes
+          changed=false
+          while IFS= read -r f; do
+            # Only regular files in the repository: `realpath` resolves symlinks anywhere in the path.
+            if [ ! -f "$f" ] || [ "$(realpath -e -- "$f")" != "$(pwd -P)/${f}" ]; then
+              echo "::warning::Skipping ${f}: it's not a regular file in the repository anymore."
+              continue
+            fi
+            if ! cmp -s -- "${temp}/orig/${f}" "$f"; then
+              install -D -m 644 -- "$f" "${temp}/pr/files/${f}"
+              echo "Changed: ${f}"
+              changed=true
+            fi
+          done < "${temp}/marked-files.txt"
 
-          safe_git() { git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
-          safe_git diff --no-ext-diff --no-textconv --binary > "${RUNNER_TEMP}/pr/changes.patch"
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
 
-          if [ -s "${RUNNER_TEMP}/pr/changes.patch" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            safe_git diff --no-ext-diff --no-textconv --stat
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          # Claude's list of pins that it couldn't check. It's untrusted text, so it goes only to the summary page
+          # (markdown), never to this step's output, where lines that start with `::` are workflow commands.
+          if [ -s "${temp}/pr/errors.md" ]; then
+            echo "incomplete=true" >> "$GITHUB_OUTPUT"
+            printf '### Pinned versions that could not be checked\n\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "${temp}/pr/errors.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$changed" = false ]; then
             echo "::notice::All marked pinned versions are up to date."
           fi
 
@@ -221,17 +256,27 @@ jobs:
         with:
           name: dependa-claude-bot
           path: ${{ runner.temp }}/pr/
+          include-hidden-files: true # Hidden paths are excluded by default (e.g., `.github/workflows/*.yml`).
           if-no-files-found: error
           retention-days: 7
+
+      # Last, so that the updates that Claude could verify still get their PR (see `open-pr`'s condition).
+      - name: Fail if some pinned versions couldn't be checked
+        if: steps.patch.outputs.incomplete == 'true'
+        run: |
+          echo "::error::Claude couldn't check some of the pinned versions: see the run's summary page."
+          exit 1
 
   open-pr:
     name: Open pull request
     needs: check
-    if: needs.check.outputs.changed == 'true'
+    # Also after the last step of `check` failed because some pins couldn't be checked:
+    # the others still get a PR. This job's own checks don't depend on how `check` ended.
+    if: ${{ !cancelled() && needs.check.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read # The job's own token is only used to download the artifact: pushing uses the app token.
+      contents: read # The job's own token is only used to download the artifact: writes use the app token.
 
     steps:
       - name: Create GitHub App token
@@ -263,41 +308,98 @@ jobs:
           set -euo pipefail
           pr_dir="${RUNNER_TEMP}/pr"
 
-          # The patch may only touch files that carry the marker (computed here, from a fresh checkout).
+          # The artifact may only contain files that carry the marker (computed here, from a fresh checkout).
           git grep -il 'not updated by dependabot' -- ':!.github/workflows/dependa-claude-bot.yml' \
             | sort > "${RUNNER_TEMP}/marked.txt"
-          git apply --numstat "${pr_dir}/changes.patch" | cut -f3 | sort -u > "${RUNNER_TEMP}/patched.txt"
-          if comm -13 "${RUNNER_TEMP}/marked.txt" "${RUNNER_TEMP}/patched.txt" | grep -q .; then
-            echo "::error::The patch touches files that aren't marked as not updated by Dependabot:"
-            comm -13 "${RUNNER_TEMP}/marked.txt" "${RUNNER_TEMP}/patched.txt"
+          mkdir -p "${pr_dir}/files"
+          extra=$(cd "${pr_dir}/files" && find . ! -type d | sed 's#^\./##' | sort | comm -23 - "${RUNNER_TEMP}/marked.txt")
+          if [ -n "$extra" ]; then
+            echo "::error::The artifact contains files that aren't marked as not updated by Dependabot:"
+            sed 's/^/  /' <<< "$extra" # Indented: names that start with `::` would be workflow commands.
             exit 1
           fi
 
-          # A file-level check isn't enough, because the marked files include workflows that run with secrets as
-          # soon as the PR opens: the patch may only change version numbers and commit SHAs, and only on marked
-          # lines (or on Oracle download URLs, whose marker is in the comment above them).
-          git apply --index "${pr_dir}/changes.patch"
-          # Only in-place edits of regular, non-executable files: the API commit below can't keep file modes.
+          # Copy the new contents over the checkout: only regular files, onto tracked regular files.
+          while IFS= read -r f; do
+            src="${pr_dir}/files/${f}"
+            [ -e "$src" ] || [ -L "$src" ] || continue
+            if [ ! -f "$src" ] || [ -L "$src" ] || [ ! -f "$f" ] || [ -L "$f" ]; then
+              echo "::error file=${f}::Not a regular file."
+              exit 1
+            fi
+            cat -- "$src" > "$f" # Keeps the file's mode.
+          done < "${RUNNER_TEMP}/marked.txt"
+          git add -u
+          if git diff --cached --quiet; then
+            echo "::notice::The changed files are identical to the default branch: nothing to do."
+            exit 0
+          fi
+
+          # The marked files include workflows that run with secrets as soon as the PR opens, so the changes may only
+          # touch version numbers and commit SHAs, and only on marked lines, or in the block of lines below a marker.
+          # The API commit below can't set file modes, so only regular, non-executable files are supported.
           if git diff --cached --raw | grep -vE '^:100644 100644 [0-9a-f]+ [0-9a-f]+ M'; then
-            echo "::error::The patch creates, deletes, renames, or changes the mode of files (listed above)."
+            echo "::error::The changes include files that aren't regular, non-executable files (listed above)."
             exit 1
           fi
 
-          norm() { sed -E 's/[0-9a-f]{40}/<sha>/g; s/[0-9]+/<n>/g'; }
+          # Only these may change: commit SHAs, dotted versions, and Oracle's download directory.
+          norm() {
+            sed -E \
+              -e 's/[0-9a-f]{40}/<sha>/g' \
+              -e 's/[0-9]+(\.[0-9]+){2,}/<version>/g' \
+              -e 's#/instantclient/[0-9]+/#/instantclient/<n>/#g' # Oracle version directory without dots.
+          }
           while IFS= read -r f; do
             if ! cmp -s <(git show "HEAD:${f}" | norm) <(git show ":${f}" | norm); then
-              echo "::error file=${f}::The patch changes more than version numbers and commit SHAs."
+              echo "::error file=${f}::The changes include more than version numbers and commit SHAs."
               exit 1
             fi
           done < <(git diff --cached --name-only)
 
-          unmarked=$(git diff --cached -U0 | grep -E '^-' | grep -vE '^--- (a/|/dev/null)' \
-            | grep -viE 'not updated by dependabot|download\.oracle\.com/' || true)
+          # Lines (of a file at HEAD) that carry the marker, plus, for a marker on a comment-only line,
+          # the block of lines below it, up to the next blank line.
+          covered() {
+            git show "HEAD:$1" | awk '
+              /^[[:space:]]*$/ { blk = 0 }
+              tolower($0) ~ /not updated by dependabot/ { print NR; if ($0 ~ /^[[:space:]]*#/) blk = 1; next }
+              blk { print NR }'
+          }
+          # The removed lines of a file's diff (their numbers come from the hunk headers) that aren't covered.
+          uncovered() {
+            local f=$1 start count n ok
+            ok=$(covered "$f")
+            while read -r start count; do
+              for ((n = start; n < start + ${count:-1}; n++)); do
+                grep -qxF "$n" <<< "$ok" || echo "${f}:${n}: $(git show "HEAD:${f}" | sed -n "${n}p")"
+              done
+            done < <(git diff --cached -U0 -- "$f" | sed -nE 's/^@@ -([0-9]+),?([0-9]*) .*/\1 \2/p')
+          }
+          unmarked=$(while IFS= read -r f; do uncovered "$f"; done < <(git diff --cached --name-only))
           if [ -n "$unmarked" ]; then
-            echo "::error::The patch changes lines that aren't marked as not updated by Dependabot:"
+            echo "::error::The changes touch lines that aren't marked as not updated by Dependabot:"
             echo "$unmarked"
             exit 1
           fi
+
+          # Each new commit SHA must be the commit of the version in its `# vX.Y.Z` comment, according to the
+          # Go module proxy. The checks above accept any SHA, including commits that exist only in a fork (which
+          # GitHub also serves through the upstream repository). SHAs that can't be verified this way are rejected.
+          while IFS= read -r line; do
+            [[ $line =~ [0-9a-f]{40} ]] || continue
+            if ! [[ $line =~ go\ install\ ([^@[:space:]]+)@([0-9a-f]{40})\ \#\ (v[0-9][^[:space:]]*) ]]; then
+              echo "::error::Can't verify the commit SHA in: ${line}"
+              exit 1
+            fi
+            mod=${BASH_REMATCH[1]} sha=${BASH_REMATCH[2]} ver=${BASH_REMATCH[3]}
+            mod_escaped=$(sed -E 's/([A-Z])/!\L\1/g' <<< "$mod") # The proxy's case encoding.
+            want=$(curl -sSf --max-time 30 "https://proxy.golang.org/${mod_escaped}/@v/${ver}.info" \
+              | jq -r '.Origin.Hash // empty' || true)
+            if [ "$want" != "$sha" ]; then
+              echo "::error::${mod}@${sha} isn't the commit of ${ver} (expected: ${want:-unknown})."
+              exit 1
+            fi
+          done < <(git diff --cached -U0 | grep -E '^\+' | grep -vE '^\+\+\+ ' || true)
 
           default_title=":robot: build(deps): Update pinned versions that Dependabot doesn't cover"
           title=$(head -n 1 "${pr_dir}/title.txt" 2>/dev/null | tr -d '\r' | cut -c1-200 || true)
@@ -307,6 +409,11 @@ jobs:
           if [ ! -s "$body_file" ]; then
             echo "Updates to the pinned versions that are marked as not updated by Dependabot." > "$body_file"
           fi
+          if [ -s "${pr_dir}/errors.md" ]; then
+            { printf '> [!WARNING]\n> Some pinned versions could not be checked:\n>\n'; sed 's/^/> /' "${pr_dir}/errors.md"
+              printf '\n'; cat "$body_file"; } > "${RUNNER_TEMP}/body.md"
+            body_file="${RUNNER_TEMP}/body.md"
+          fi
 
           # Create the branch and its commit through the API instead of `git commit` and `git push`:
           # GitHub signs commits that a GitHub App creates this way (no signing key needed),
@@ -314,6 +421,9 @@ jobs:
           branch="dependa-claude-bot/$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
           base_sha=$(git rev-parse HEAD)
           gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${branch}" -f sha="${base_sha}" > /dev/null
+          # If anything below fails, delete the branch: the skip check in `check` only looks for open PRs.
+          pr_url=""
+          trap '[ -n "$pr_url" ] || gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" || true' EXIT
 
           additions=$(
             while IFS= read -r f; do
@@ -339,4 +449,5 @@ jobs:
             echo "::warning::Created commit ${commit_oid} on ${branch}, but GitHub doesn't show it as verified."
           fi
 
-          gh pr create --base "$BASE_BRANCH" --head "$branch" --title "$title" --body-file "$body_file"
+          pr_url=$(gh pr create --base "$BASE_BRANCH" --head "$branch" --title "$title" --body-file "$body_file")
+          echo "$pr_url"

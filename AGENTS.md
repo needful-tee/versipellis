@@ -83,6 +83,13 @@ go test -timeout 30s -v -race -coverprofile=coverage.out ./pkg/...
 go test -timeout 30s -v -count 1 -run TestFuncName ./pkg/http/...
 ```
 
+Workflow tests (not Go): after changing `.github/workflows/dependa-claude-bot.yml`, run its
+regression tests (CI runs them too). On macOS, see the script's header for the GNU tools it needs.
+
+```shell
+bash .github/scripts/test-dependa-claude-bot.sh
+```
+
 Auto-formatting + static analysis with auto-fixes (details in the next section):
 
 ```shell
