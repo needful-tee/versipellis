@@ -87,7 +87,7 @@ CGO_ENABLED=1 go build -tags=odbc ./cmd/versi && ./versi -h
 - Directions: pull (retrieve from servers), push (receive from clients)
 - Encryption: none, TLS, mTLS
 - Content encoding: `identity` (none), `gzip`
-- [Coming soon](./docs/roadmap.md): Authentication and authorization (pull only):  
+- Authentication and authorization (pull only):  
   username + password (RFC 7617), static keys/tokens, OAuth 2, JWT
 
 ### SQL Input
@@ -116,5 +116,5 @@ Supported SQL-based databases:
 
 - Directions: push (send to servers)
 - Same feature set as [HTTP input](#http-input) above
-  - [Coming soon](./docs/roadmap.md): Including authentication and authorization
+  - Including authentication and authorization
   - Not including content encoding, i.e. compression (yet)

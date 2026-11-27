@@ -26,33 +26,21 @@ const (
 	maxJWTExpiration     = time.Hour
 )
 
-var (
-	// Registered JWT claims whose values must be [jwt.NumericDate]s.
-	// See: https://datatracker.ietf.org/doc/html/rfc7519#section-4.1
-	numericDateClaims = []string{"exp", "nbf", "iat"}
-
-	dateTimeLayouts = []string{
-		time.RFC3339,
-		"2006-01-02T15:04:05",       // [time.RFC3339] without timezone offset.
-		"2006-01-02 15:04:05Z07:00", // [time.RFC3339] with a space instead of a 'T'.
-		time.DateTime,
-		time.DateOnly,
-	}
-)
+var dateTimeLayouts = []string{
+	time.RFC3339,
+	"2006-01-02T15:04:05",       // [time.RFC3339] without timezone offset.
+	"2006-01-02 15:04:05Z07:00", // [time.RFC3339] with a space instead of a 'T'.
+	time.DateTime,
+	time.DateOnly,
+}
 
 func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
-	claims, err := parseJWTClaims(cfg)
-	if err != nil {
-		return err
-	}
-	c.jwtExpiration, err = parseJWTExpiration(cfg, name)
-	if err != nil {
-		return err
-	}
-
-	data, err := config.LoadPEMFile(config.Value(cfg, "jwt_private_key_file", ""), "JWT private key", true)
+	data, err := config.LoadPEMFile(config.Value(cfg, "jwt_private_key_file", ""), "JWT private key", false)
 	if err != nil {
 		return err //nolint:wrapcheck // No need to contextualize a sibling error.
+	}
+	if data == nil {
+		return nil
 	}
 	var method jwt.SigningMethod
 	c.jwtSigningKey, method, err = parseJWTPrivateKey(data)
@@ -60,11 +48,20 @@ func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
 		return err
 	}
 
+	c.jwtExpiration, err = parseJWTExpiration(cfg, name)
+	if err != nil {
+		return err
+	}
+	claims, err := parseJWTClaims(cfg)
+	if err != nil {
+		return err
+	}
+
 	c.jwtTemplate = jwt.NewWithClaims(method, claims)
-	return c.checkJWTClaims(name)
+	return nil
 }
 
-// ParseJWTClaims parses the "jwt_claims" TOML table, if found, into a [jwt.MapClaims] object.
+// parseJWTClaims parses the "jwt_claims" TOML table, if found, into a [jwt.MapClaims] object.
 // [jwt.MapClaims] recognizes only float64 and [json.Number] values as numeric dates, so:
 //   - TOML integers are decoded as int64 and converted losslessly to [json.Number].
 //   - TOML floats are decoded as float64, but non-finite values are rejected.
@@ -75,7 +72,7 @@ func (c *Config) parseJWTConfig(cfg map[string]any, name string) error {
 func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 	anyValue, found := cfg["jwt_claims"]
 	if !found {
-		return nil, nil
+		return jwt.MapClaims{}, nil
 	}
 	table, ok := anyValue.(map[string]any)
 	if !ok {
@@ -84,6 +81,10 @@ func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 
 	table = maps.Clone(table)
 	for k, v := range table {
+		if k == "exp" || k == "iat" {
+			continue // Ignored (and removed) in [Config.checkJWTClaims], so their values don't matter.
+		}
+
 		switch n := v.(type) {
 		case int64:
 			table[k] = json.Number(strconv.FormatInt(n, 10))
@@ -98,8 +99,8 @@ func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 		case toml.LocalDate:
 			table[k] = numericDate(n.AsTime(hostTimeZone()))
 		case string:
-			if !slices.Contains(numericDateClaims, k) {
-				continue
+			if k != "nbf" {
+				continue // Registered JWT claim whose value must be a [jwt.NumericDate] (RFC 7519 §4.1).
 			}
 			d, err := parseNumericDate(n)
 			if err != nil {
@@ -109,7 +110,7 @@ func parseJWTClaims(cfg map[string]any) (jwt.MapClaims, error) {
 		}
 
 		// Anything else (e.g., TOML local times without a date) can't be a numeric date.
-		if slices.Contains(numericDateClaims, k) {
+		if k == "nbf" {
 			switch table[k].(type) {
 			case float64, json.Number:
 			default:
@@ -178,20 +179,48 @@ func parseJWTExpiration(cfg map[string]any, name string) (time.Duration, error) 
 }
 
 func (c *Config) checkJWTClaims(name string) error {
-	mc := c.jwtTemplate.Claims.(jwt.MapClaims) //nolint:errcheck // OK by definition.
+	mc, _ := c.jwtTemplate.Claims.(jwt.MapClaims)
 	if _, ok := mc["exp"]; ok {
-		slog.Warn("JWT bearer claim 'exp' (expiration time) is configured but ignored", slog.String("name", name))
+		slog.Warn("JWT claim 'exp' (expiration time) is configured but ignored", slog.String("name", name))
 		delete(mc, "exp")
 	}
 	if _, ok := mc["iat"]; ok {
-		slog.Warn("JWT bearer claim 'iat' (issued at) is configured but ignored", slog.String("name", name))
+		slog.Warn("JWT claim 'iat' (issued at) is configured but ignored", slog.String("name", name))
 		delete(mc, "iat")
 	}
+	if _, ok := mc["jti"]; ok {
+		slog.Warn("JWT claim 'jti' (JWT ID) is configured but ignored", slog.String("name", name))
+		delete(mc, "jti")
+	}
+
 	if len(mc) == 0 {
-		return fmt.Errorf("JWT claims are required for OAuth grant type %q", c.grant)
+		return fmt.Errorf(`"jwt_claims" is required for OAuth grant type %q`, c.grant)
+	}
+	// Scopes are normalized into a space-delimited string (RFC 6749 §3.3), the same as "oauth_scopes", so they're also
+	// sent as the "scope" parameter of the token request (see [jwtTokenSource.generateJWT]), and they override them.
+	if v, ok := mc["scope"]; ok {
+		scopes, err := scopesFromValue(v, "jwt_claims.scope", name)
+		if err != nil {
+			return err
+		}
+		if len(scopes) > 0 {
+			mc["scope"] = strings.Join(scopes, " ")
+		} else {
+			delete(mc, "scope") // Falls back to "oauth_scopes" below, if any.
+		}
 	}
 	if _, ok := mc["scope"]; !ok && len(c.oauthConfig.Scopes) > 0 {
 		mc["scope"] = strings.Join(c.oauthConfig.Scopes, " ")
+	}
+
+	if s, err := mc.GetIssuer(); err != nil || s == "" {
+		return errors.New("JWT claim 'iss' (issuer) is required to be a non-empty string")
+	}
+	if s, err := mc.GetSubject(); err != nil || s == "" {
+		return errors.New("JWT claim 'sub' (subject) is required to be a non-empty string")
+	}
+	if s, err := mc.GetAudience(); err != nil || len(s) == 0 || slices.Contains(s, "") {
+		return errors.New("JWT claim 'aud' (audience) is required to be a non-empty string or array of non-empty strings")
 	}
 
 	c.jwtTemplate.Claims = mc

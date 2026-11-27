@@ -24,10 +24,12 @@ It is entirely optional, but some fields may be required in some use-cases.
 `basic_username` - username for basic authentication
 
 - Required when `type = "basic"`
+- Has no effect otherwise
 
 `basic_password` - password for basic authentication
 
 - Required when `type = "basic"`
+- Has no effect otherwise
 
 ### Static Key or Token
 
@@ -77,40 +79,62 @@ It is entirely optional, but some fields may be required in some use-cases.
 - Dynamic default, based on these ordered rules:
   1. `"authorization_code"` if `oauth_auth_url` _or_ `oauth_callback_url` is set
   2. `"refresh_token"` if `oauth_refresh_token` is set
-  3. `"client_credentials"` if `oauth_client_id` is set
-  4. `"jwt_bearer"` otherwise
+  3. `"jwt_bearer"` if `jwt_private_key_file` is set
+  4. `"client_credentials"` otherwise
 - Options (case insensitive):
   - [`"authorization_code"`](https://oauth.net/2/grant-types/authorization-code/) (3-legged flow requiring one-time user interaction via a local browser)
   - [`"client_credentials"`](https://oauth.net/2/grant-types/client-credentials/)
   - [`"refresh_token"`](https://oauth.net/2/grant-types/refresh-token/)
-  - [`"jwt_bearer"`](https://oauth.net/2/jwt/) (normalized to `"urn:ietf:params:oauth:grant-type:jwt-bearer"`)
+  - [`"jwt_bearer"`](https://datatracker.ietf.org/doc/html/rfc7523) (normalized to `"urn:ietf:params:oauth:grant-type:jwt-bearer"`)
 
 `oauth_client_id` - client ID for most OAuth flows
 
 - Required when `type = "oauth"`, _unless_ `oauth_grant_type = "jwt_bearer"`
+- Optional when `oauth_grant_type = "jwt_bearer"`
+- Either way, required when `oauth_client_secret` is set
 
 `oauth_client_secret` - client secret for some OAuth flows
 
-- Required when `oauth_grant_type = "authorization_code"`, _unless_ `oauth_pkce = true`
-- Also required when `oauth_grant_type = "client_credentials"`
+- Required when:
+  - `oauth_grant_type = "authorization_code"`, _unless_ `oauth_pkce = true`
+  - `oauth_grant_type = "client_credentials"`
+- Optional when:
+  - `oauth_grant_type = "refresh_token"`
+  - `oauth_grant_type = "jwt_bearer"`
 
 `oauth_auth_url` - authorization endpoint URL for interactive OAuth flows
 
 - Required when `oauth_grant_type = "authorization_code"`
-- Must start with `"https://"` (per [RFC 6749 § 3.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1)),  
-  unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
-
-`oauth_callback_url` - redirection URL back to the client in interactive OAuth flows
-
-- Required when `oauth_grant_type = "authorization_code"`
-- Must start with `"https://"` (per [RFC 6749 § 3.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1.2.1)),  
+- Must start with `"https://"` (per [RFC 6749 §3.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1)),  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
 
 `oauth_token_url` - token endpoint URL for all OAuth flows
 
 - Required when `type = "oauth"`
-- Must start with `"https://"` (per [RFC 6749 § 3.2](https://datatracker.ietf.org/doc/html/rfc6749#section-3.2)),  
+- Must start with `"https://"` (per [RFC 6749 §3.2](https://datatracker.ietf.org/doc/html/rfc6749#section-3.2)),  
   unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
+
+`oauth_callback_url` - redirection URL back to the client in interactive OAuth flows
+
+- Required when `oauth_grant_type = "authorization_code"`
+- Must start with `"https://"` (based on, but stricter than, [RFC 6749 §3.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-3.1.2.1))  
+  unless the host is loopback (`localhost`, `127.0.0.0/8`, or `[::1]`)
+
+`oauth_callback_address` - local TCP address to receive Authorization Code callbacks
+
+> [!NOTE]
+> The callback listener serves plain **HTTP, not HTTPS**, while `oauth_callback_url`
+> must start with `"https://"` (unless both use a loopback address). This usually means you
+> need a trusted [TLS termination proxy](https://en.wikipedia.org/wiki/TLS_termination_proxy),
+> a.k.a. a reverse tunnel, such as [ngrok](https://ngrok.com/docs/share-localhost/quickstart),
+> [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/), etc.
+
+- Required when `oauth_grant_type = "authorization_code"`
+- Examples:
+  - `"localhost:4474"`
+  - `"127.0.0.1:4474"` (IPv4)
+  - `"[::1]:4474"` (IPv6, must be enclosed in square brackets)
+  - `"0.0.0.0:4474"` or `"[::]:4474"` (all network interfaces)
 
 `oauth_refresh_token` - static refresh token
 
@@ -174,16 +198,18 @@ It is entirely optional, but some fields may be required in some use-cases.
 `jwt_claims` - static claims in each generated token
 
 - Required when `oauth_grant_type = "jwt_bearer"`
+- Required keys: `iss` (issuer), `sub` (subject), `aud` (audience)
+- Ignored keys: `exp`, `iat`, and `jti` (because they're set automatically in each generated token)
 - Values may be of any TOML type; TOML date-times are converted to Unix timestamps (whole seconds)
   - Local date-times and dates (without a time zone offset) are in the host's local time zone, dates at midnight
-  - `exp`, `nbf`, and `iat` must be numbers or date-times, which may also be quoted strings in the same formats
-- `exp` and `iat` are ignored, because they're set automatically in each generated token (see `jwt_expiration`)
+  - `nbf` must be a number or a date-time (if specified), which may also be a quoted string in the same format
+  - `scope` may be a string or an array of strings (if specified), which is converted to a space-delimited string, like `oauth_scopes`; if it's not empty, it overrides `oauth_scopes` and is also sent as the `scope` parameter of token requests
 - The TOML file format supports multiple representation options for key-value pairs:
 
   ```toml
   [*.auth]
   # ...
-  jwt_claims = { iss = "value1", sub = "value2", ... }
+  jwt_claims = { iss = "value1", sub = "value2", aud = "value3", ... }
   ```
 
   ```toml
@@ -192,6 +218,7 @@ It is entirely optional, but some fields may be required in some use-cases.
   jwt_claims = {
       iss = "value1",
       sub = "value2",
+      aud = "value3",
       # ...
   }
   ```
@@ -201,6 +228,7 @@ It is entirely optional, but some fields may be required in some use-cases.
   # ...
   jwt_claims.iss = "value1"
   jwt_claims.sub = "value2"
+  jwt_claims.aud = "value3"
   # ...
   ```
 
@@ -211,5 +239,6 @@ It is entirely optional, but some fields may be required in some use-cases.
   [*.auth.jwt_claims]
   iss = "value1"
   sub = "value2"
+  aud = "value3"
   # ...
   ```

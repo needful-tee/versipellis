@@ -449,7 +449,6 @@ func (s *Sender) sendOnce(ctx context.Context, u *url.URL, h http.Header, fn get
 			slog.Time("start_time", start), slog.Duration("duration", time.Since(start)),
 		)
 	}
-
 	return resp, retryable(resp.StatusCode)
 }
 
@@ -514,19 +513,27 @@ func newErrorResponse(statusCode int) *http.Response {
 	}
 }
 
-func retryable(statusCode int) bool {
-	if statusCode < http.StatusBadRequest { // All 2xx and 3xx status codes.
+// The same as retryable() in auth/oauth_exchange.go, but generic HTTP and OAuth policies may diverge in the future.
+func retryable(status int) bool {
+	switch status {
+	// Allow-list of retryable 4xx codes.
+	case http.StatusRequestTimeout,
+		http.StatusConflict,
+		http.StatusLocked,
+		http.StatusTooEarly,
+		http.StatusTooManyRequests:
+		return true
+	// Deny-list of non-retryable 5xx codes.
+	case http.StatusNotImplemented,
+		http.StatusHTTPVersionNotSupported,
+		http.StatusVariantAlsoNegotiates,
+		http.StatusLoopDetected,
+		http.StatusNotExtended,
+		http.StatusNetworkAuthenticationRequired,
+		525, 526: // https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#Nonstandard_codes
 		return false
+	// Besides all the above, 5xx codes should be retryable by default, but 2xx-4xx shouldn't be.
+	default:
+		return status >= http.StatusInternalServerError && status < 600
 	}
-	switch statusCode {
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return false
-	case http.StatusMethodNotAllowed, http.StatusProxyAuthRequired, http.StatusGone, http.StatusLengthRequired:
-		return false
-	case http.StatusRequestEntityTooLarge, http.StatusRequestURITooLong, http.StatusUnsupportedMediaType:
-		return false
-	case http.StatusUnprocessableEntity, http.StatusRequestHeaderFieldsTooLarge, http.StatusNotImplemented:
-		return false
-	}
-	return true
 }

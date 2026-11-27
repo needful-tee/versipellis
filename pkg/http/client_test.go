@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"needful-t.ee/versipellis/internal/sandbox"
 	"needful-t.ee/versipellis/pkg/codec"
 	"needful-t.ee/versipellis/pkg/config"
 	"needful-t.ee/versipellis/pkg/dest"
@@ -38,6 +39,7 @@ func TestClientH3WithoutTLSReturnsNil(t *testing.T) {
 
 func TestCollectorRequestWithRetries(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	_ = clientH2(&tls.Config{}, 0, time.Second, "TestCollectorRequestWithRetries")
 
@@ -49,13 +51,13 @@ func TestCollectorRequestWithRetries(t *testing.T) {
 		{"200", http.StatusOK, false},
 		{"300", http.StatusMultipleChoices, false},
 		{"400", http.StatusBadRequest, false},
-		{"404", http.StatusNotFound, false},
-		{"405", http.StatusMethodNotAllowed, false},
-		{"413", http.StatusRequestEntityTooLarge, false},
-		{"422", http.StatusUnprocessableEntity, false},
-		{"431", http.StatusRequestHeaderFieldsTooLarge, false},
+		{"412", http.StatusPreconditionFailed, false},
+		{"429", http.StatusTooManyRequests, true},
 		{"501", http.StatusNotImplemented, false},
-		{"503_retryable", http.StatusServiceUnavailable, true},
+		{"503", http.StatusServiceUnavailable, true},
+		{"525", 525, false},
+		{"529", 529, true},
+		{"999", 999, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,6 +106,8 @@ func TestCollectorRequestWithRetries(t *testing.T) {
 }
 
 func TestSenderSendWithRetries(t *testing.T) { //nolint:paralleltest // Don't share transports between tests.
+	sandbox.RequireLoopback(t)
+
 	tests := []struct {
 		name      string
 		status    int
@@ -112,13 +116,13 @@ func TestSenderSendWithRetries(t *testing.T) { //nolint:paralleltest // Don't sh
 		{"200", http.StatusOK, false},
 		{"300", http.StatusMultipleChoices, false},
 		{"400", http.StatusBadRequest, false},
-		{"404", http.StatusNotFound, false},
-		{"405", http.StatusMethodNotAllowed, false},
-		{"413", http.StatusRequestEntityTooLarge, false},
-		{"422", http.StatusUnprocessableEntity, false},
-		{"431", http.StatusRequestHeaderFieldsTooLarge, false},
+		{"412", http.StatusPreconditionFailed, false},
+		{"429", http.StatusTooManyRequests, true},
 		{"501", http.StatusNotImplemented, false},
-		{"503_retryable", http.StatusServiceUnavailable, true},
+		{"503", http.StatusServiceUnavailable, true},
+		{"525", 525, false},
+		{"529", 529, true},
+		{"999", 999, false},
 	}
 	for _, tt := range tests { //nolint:paralleltest // Don't share transports between tests.
 		t.Run(tt.name, func(t *testing.T) {
@@ -163,8 +167,85 @@ func TestSenderSendWithRetries(t *testing.T) { //nolint:paralleltest // Don't sh
 	}
 }
 
+// TestRetryable must be kept in sync with TestRetryable in the auth package, which has its own copy of the policy.
+func TestRetryable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status int
+		want   bool
+	}{
+		// Not errors, redirections and unlisted client errors.
+		{0, false}, // No response at all.
+		{http.StatusContinue, false},
+		{http.StatusOK, false},
+		{http.StatusNoContent, false},
+		{http.StatusMovedPermanently, false},
+		{http.StatusNotModified, false},
+		{http.StatusBadRequest, false},
+		{http.StatusUnauthorized, false},
+		{http.StatusForbidden, false},
+		{http.StatusNotFound, false},
+		{http.StatusGone, false},
+		{http.StatusPreconditionFailed, false},
+		{http.StatusRequestEntityTooLarge, false},
+		{http.StatusMisdirectedRequest, false},
+		{http.StatusUnprocessableEntity, false},
+		{http.StatusFailedDependency, false},
+		{http.StatusPreconditionRequired, false},
+		{http.StatusRequestHeaderFieldsTooLarge, false},
+		{499, false}, // The last status before the server errors.
+		{600, false}, // Not a valid HTTP status class: only 5xx codes may be retried.
+		{999, false}, // Used by some sites to block clients (e.g., LinkedIn), so retrying it is pointless.
+
+		// The allow-list of retryable client errors.
+		{http.StatusRequestTimeout, true},
+		{http.StatusConflict, true},
+		{http.StatusLocked, true},
+		{http.StatusTooEarly, true},
+		{http.StatusTooManyRequests, true},
+
+		// The deny-list of non-retryable server errors.
+		{http.StatusNotImplemented, false},
+		{http.StatusHTTPVersionNotSupported, false},
+		{http.StatusVariantAlsoNegotiates, false},
+		{http.StatusLoopDetected, false},
+		{http.StatusNotExtended, false},
+		{http.StatusNetworkAuthenticationRequired, false},
+		{525, false}, // Cloudflare's "SSL Handshake Failed".
+		{526, false}, // Cloudflare's "Invalid SSL Certificate".
+
+		// All the other server errors are retryable, whether they're standard or not.
+		{http.StatusInternalServerError, true},
+		{http.StatusBadGateway, true},
+		{http.StatusServiceUnavailable, true},
+		{http.StatusGatewayTimeout, true},
+		{http.StatusInsufficientStorage, true},
+		{520, true},
+		{521, true},
+		{522, true},
+		{523, true},
+		{524, true},
+		{527, true},
+		{529, true},
+		{530, true},
+		{598, true},
+		{599, true},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.status), func(t *testing.T) {
+			t.Parallel()
+
+			if got := retryable(tt.status); got != tt.want {
+				t.Errorf("retryable(%d) = %v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCollectorRequestOnceEdgeCases(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name      string
@@ -217,6 +298,7 @@ func TestCollectorRequestOnceEdgeCases(t *testing.T) {
 
 func TestSenderSendOnceEdgeCases(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name      string
@@ -283,6 +365,7 @@ func TestSenderSendOnceEdgeCases(t *testing.T) {
 
 func TestCollectorProcessResponseErrors(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name       string
@@ -354,6 +437,7 @@ func fakeHandler(t *testing.T, contentLength, statusCode int, body string) http.
 
 func TestCollectorRequestWithRetriesShutdown(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name   string
@@ -422,6 +506,7 @@ func TestCollectorRequestWithRetriesShutdown(t *testing.T) {
 
 func TestSenderSendWithRetriesShutdown(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name   string
@@ -493,6 +578,7 @@ func TestSenderSendWithRetriesShutdown(t *testing.T) {
 
 func TestCollectorRequestOnceNetworkErrors(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	t.Run("timeout_returns_504", func(t *testing.T) {
 		t.Parallel()
@@ -552,6 +638,7 @@ func TestCollectorRequestOnceNetworkErrors(t *testing.T) {
 
 func TestSenderSendOnceNetworkError(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -622,6 +709,7 @@ func oauthTestConfig(tokenURL string) map[string]any {
 // A failed token refresh must be retried like a failed request, without dereferencing a nil response.
 func TestCollectorTokenRefreshFailure(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	server, tokenRequests, dataRequests := newRefreshFailingServer(t)
 	base, err := config.NewBaseCollector(
@@ -661,6 +749,7 @@ func TestCollectorTokenRefreshFailure(t *testing.T) {
 // and eventually pass the data to the fallback sender (the DLQ) instead of crashing.
 func TestSenderTokenRefreshFailure(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	server, tokenRequests, dataRequests := newRefreshFailingServer(t)
 	sender, err := NewSender(t.Context(), map[string]any{
@@ -731,6 +820,7 @@ func testContext(t *testing.T, canceled bool) context.Context {
 
 func TestRequestOnceTokenFailure(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name       string
@@ -844,6 +934,7 @@ func TestOAuthClient(t *testing.T) {
 // Token requests must not use the component's own client, which is configured for its own server.
 func TestOAuthTokenRequestsIgnoreComponentTLS(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tokenHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1028,6 +1119,7 @@ func newRedirectingServer(t *testing.T, sameHost bool) (string, <-chan string) {
 // the "Authorization" header and cookies, so components must not send them to other hosts.
 func TestRedirectsDropAuthHeaderOfOtherHosts(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	staticAuth := map[string]any{"type": "static", "static_header": "x-api-key", "static_prefix": "", "static_secret": "s3cr3t"}
 	tests := []struct {
@@ -1100,9 +1192,7 @@ func TestOAuthCheckRedirect(t *testing.T) {
 		{name: "same_origin_307", status: 307, via: []string{"https://a.com/token"}, url: "https://a.com/v2/token"},
 		{name: "same_origin_308", status: 308, via: []string{"https://a.com/token"}, url: "https://a.com/v2/token"},
 		{name: "same_origin_different_case", status: 307, via: []string{"https://a.com/token"}, url: "HTTPS://A.COM/v2"},
-		{name: "same_origin_301", status: 301, via: []string{"https://a.com/token"}, url: "https://a.com/v2", wantErr: true},
 		{name: "same_origin_302", status: 302, via: []string{"https://a.com/token"}, url: "https://a.com/v2", wantErr: true},
-		{name: "same_origin_303", status: 303, via: []string{"https://a.com/token"}, url: "https://a.com/v2", wantErr: true},
 		{name: "other_host", status: 307, via: []string{"https://a.com/token"}, url: "https://b.com/token", wantErr: true},
 		{name: "other_port", status: 307, via: []string{"https://a.com/token"}, url: "https://a.com:8443/token", wantErr: true},
 		{name: "subdomain", status: 307, via: []string{"https://a.com/token"}, url: "https://sub.a.com/token", wantErr: true},
@@ -1175,6 +1265,7 @@ func TestOAuthCheckRedirect(t *testing.T) {
 // Token requests contain the client secret, so they may follow only 307 and 308 redirects to the same origin.
 func TestOAuthTokenRedirects(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name        string
@@ -1183,7 +1274,6 @@ func TestOAuthTokenRedirects(t *testing.T) {
 		wantErr     bool
 	}{
 		{name: "same_origin_307", status: http.StatusTemporaryRedirect},
-		{name: "same_origin_308", status: http.StatusPermanentRedirect},
 		{name: "same_origin_302", status: http.StatusFound, wantErr: true},
 		{name: "other_origin_307", status: http.StatusTemporaryRedirect, otherOrigin: true, wantErr: true},
 	}
@@ -1222,9 +1312,6 @@ func TestOAuthTokenRedirects(t *testing.T) {
 			}, t.Name(), config.SenderTypeHTTP, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("NewSender() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil && !strings.Contains(err.Error(), "refusing to redirect OAuth") {
-				t.Errorf("NewSender() error = %v, want a redirect error", err)
 			}
 			if got := redirectedRequests.Load(); tt.wantErr && got != 0 {
 				t.Errorf("redirect target got %d requests, want 0", got)

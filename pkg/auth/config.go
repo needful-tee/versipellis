@@ -37,6 +37,7 @@ type Config struct {
 	oauthClientCreds  *clientcredentials.Config
 	oauthAuthParams   map[string]string
 	oauthTokenParams  map[string]string
+	oauthWebhookAddr  string
 	oauthRefreshToken string
 	oauthPKCE         bool
 

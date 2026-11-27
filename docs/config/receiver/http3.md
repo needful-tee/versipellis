@@ -9,6 +9,7 @@
   - `"localhost:3474"`
   - `"127.0.0.1:3474"` (IPv4)
   - `"[::1]:3474"` (IPv6, must be enclosed in square brackets)
+  - `"0.0.0.0:3474"` or `"[::]:3474"` (all network interfaces)
 
 `max_body_size` - maximum byte size of a client request's whole body
 

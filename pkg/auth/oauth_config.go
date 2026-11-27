@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -61,6 +63,9 @@ func (c *Config) parseOAuthConfig(cfg map[string]any, name string) error {
 	}
 	c.oauthPKCE = config.Value(cfg, "oauth_pkce", false)
 	c.oauthRefreshToken = config.Value(cfg, "oauth_refresh_token", "")
+	if err := c.parseJWTConfig(cfg, name); err != nil {
+		return err
+	}
 
 	switch {
 	case c.grant == grantTypeJWTAlias:
@@ -73,12 +78,13 @@ func (c *Config) parseOAuthConfig(cfg map[string]any, name string) error {
 		c.grant = grantTypeAuthCode
 	case c.oauthRefreshToken != "":
 		c.grant = grantTypeRefreshToken
-	case c.oauthConfig.ClientID != "":
-		c.grant = grantTypeClientCreds
-	default:
+	case c.jwtSigningKey != nil:
 		c.grant = grantTypeJWTBearer
+	default:
+		c.grant = grantTypeClientCreds
 	}
 
+	c.oauthWebhookAddr = optionalString(cfg, "oauth_callback_address", "")
 	var err error
 	if c.oauthConfig.Scopes, err = parseOAuthScopes(cfg, name); err != nil {
 		return err
@@ -112,7 +118,7 @@ func (c *Config) parseOAuthConfig(cfg map[string]any, name string) error {
 		c.oauthConfig = nil
 
 	case grantTypeJWTBearer:
-		return c.parseJWTConfig(cfg, name)
+		return c.checkJWTClaims(name)
 	}
 
 	return nil
@@ -122,30 +128,56 @@ func (c *Config) checkOAuthConfig(name string) error {
 	// Required fields for different OAuth grant types.
 	switch {
 	case c.grant != grantTypeJWTBearer && c.oauthConfig.ClientID == "":
-		return fmt.Errorf("OAuth client ID is required for grant type %q", c.grant)
+		return fmt.Errorf(`"oauth_client_id" is required for grant type %q`, c.grant)
+	case c.oauthConfig.ClientID == "" && c.oauthConfig.ClientSecret != "":
+		return errors.New(`"oauth_client_id" is required when "oauth_client_secret" is set`)
+
 	case c.grant == grantTypeAuthCode && !c.oauthPKCE && c.oauthConfig.ClientSecret == "":
-		return fmt.Errorf("OAuth client secret is required for non-PKCE %q grant type", c.grant)
+		return fmt.Errorf(`"oauth_client_secret" is required for non-PKCE %q grant type`, c.grant)
 	case c.grant == grantTypeClientCreds && c.oauthConfig.ClientSecret == "":
-		return fmt.Errorf("OAuth client secret is required for grant type %q", c.grant)
+		return fmt.Errorf(`"oauth_client_secret" is required for grant type %q`, c.grant)
+
 	case c.grant == grantTypeAuthCode && c.oauthConfig.Endpoint.AuthURL == "":
-		return fmt.Errorf("OAuth auth URL is required for grant type %q", c.grant)
+		return fmt.Errorf(`"oauth_auth_url" is required for grant type %q`, c.grant)
 	case c.grant == grantTypeAuthCode && c.oauthConfig.RedirectURL == "":
-		return fmt.Errorf("OAuth callback URL is required for grant type %q", c.grant)
+		return fmt.Errorf(`"oauth_callback_url" is required for grant type %q`, c.grant)
 	case c.oauthConfig.Endpoint.TokenURL == "":
-		return fmt.Errorf("OAuth token URL is required for grant type %q", c.grant)
+		return errors.New(`"oauth_token_url" is required for all grant types`)
+
 	case c.grant == grantTypeRefreshToken && c.oauthRefreshToken == "":
-		return fmt.Errorf("OAuth refresh token is required for grant type %q", c.grant)
-	case c.grant == grantTypeRefreshToken && len(c.oauthConfig.Scopes) > 0:
-		slog.Warn("'oauth_scopes' has no effect in 'refresh_token' OAuth flows", slog.String("name", name))
+		return fmt.Errorf(`"oauth_refresh_token" is required for grant type %q`, c.grant)
+	case c.grant == grantTypeJWTBearer && c.jwtSigningKey == nil:
+		return fmt.Errorf(`"jwt_private_key_file" is required for OAuth grant type %q`, c.grant)
 	}
+
+	switch {
+	case c.grant == grantTypeAuthCode && c.oauthWebhookAddr == "":
+		return fmt.Errorf("OAuth callback local address is required for grant type %q", c.grant)
+	case c.grant != grantTypeAuthCode && c.oauthWebhookAddr != "":
+		slog.Warn(`OAuth callback local address is supported only in "authorization_code" flows`, slog.String("name", name))
+	case c.oauthWebhookAddr != "":
+		if _, err := net.ResolveTCPAddr("tcp", c.oauthWebhookAddr); err != nil {
+			return fmt.Errorf("invalid OAuth callback local address %q: %w", c.oauthWebhookAddr, err)
+		}
+	}
+
 	if c.grant != grantTypeAuthCode && c.oauthPKCE {
-		slog.Warn("PKCE is supported only in 'authorization_code' OAuth flows", slog.String("name", name))
+		slog.Warn(`"oauth_pkce" is supported only in "authorization_code" flows`, slog.String("name", name))
 	}
 	if c.grant != grantTypeAuthCode && len(c.oauthAuthParams) > 0 {
-		slog.Warn("'oauth_auth_params' is supported only in 'authorization_code' OAuth flows", slog.String("name", name))
+		slog.Warn(`"oauth_auth_params" is supported only in "authorization_code" flows`, slog.String("name", name))
 	}
 	if c.grant != grantTypeClientCreds && len(c.oauthTokenParams) > 0 {
-		slog.Warn("'oauth_token_params' is supported only in 'client_credentials' OAuth flows", slog.String("name", name))
+		slog.Warn(`"oauth_token_params" is supported only in "client_credentials" flows`, slog.String("name", name))
+	}
+	if c.grant != grantTypeRefreshToken && c.oauthRefreshToken != "" {
+		slog.Warn(`"oauth_refresh_token" is supported only in "refresh_token" flows`, slog.String("name", name))
+	}
+	if c.grant == grantTypeRefreshToken && len(c.oauthConfig.Scopes) > 0 {
+		slog.Warn(`"oauth_scopes" has no effect in "refresh_token" flows`, slog.String("name", name))
+	}
+	if c.grant != grantTypeJWTBearer && c.jwtSigningKey != nil {
+		slog.Warn(`"jwt_private_key_file" is supported only in "jwt_bearer" OAuth flows`, slog.String("name", name))
 	}
 
 	// OAuth URLs format validation (already checked above for required fields).
@@ -158,9 +190,9 @@ func (c *Config) checkOAuthConfig(name string) error {
 	return checkOAuthURL(c.oauthConfig.Endpoint.TokenURL, "token")
 }
 
-// checkOAuthURL validates an optional OAuth URL, which must use TLS (RFC 6749, sections 3.1, 3.1.2.1, and 3.2),
+// checkOAuthURL validates an optional OAuth URL, which must use TLS (RFC 6749, §§ 3.1, 3.1.2.1, and 3.2),
 // because OAuth requests and responses contain credentials and tokens. Loopback hosts are exempt, because their
-// traffic never leaves the host (e.g., callbacks to native apps, per RFC 8252, section 7.3, and local test servers).
+// traffic never leaves the host (e.g., callbacks to native apps, per RFC 8252, §7.3, and local test servers).
 func checkOAuthURL(rawURL, desc string) error {
 	u, err := config.ParseURL(rawURL, "", false)
 	switch {
@@ -182,27 +214,30 @@ func isLoopback(host string) bool {
 }
 
 func parseOAuthScopes(cfg map[string]any, name string) ([]string, error) {
-	anyValue, found := cfg["oauth_scopes"]
+	v, found := cfg["oauth_scopes"]
 	if !found {
 		return nil, nil
 	}
+	return scopesFromValue(v, "oauth_scopes", name)
+}
 
+func scopesFromValue(value any, key, name string) ([]string, error) {
 	var scopes []string
-	switch typedValue := anyValue.(type) {
+	switch t := value.(type) {
 	case string:
-		scopes = append(scopes, strings.Fields(typedValue)...)
+		scopes = append(scopes, strings.Fields(t)...)
 	case []any:
-		for _, v := range typedValue {
+		for _, v := range t {
 			if s, ok := v.(string); ok {
 				scopes = append(scopes, strings.Fields(s)...)
 				continue
 			}
-			slog.Warn("skipping non-string value in OAuth scopes array",
-				slog.String("name", name), slog.String("type", fmt.Sprintf("%T", v)),
+			slog.Warn("skipping non-string value in OAuth scopes array", slog.String("name", name),
+				slog.String("key", key), slog.String("type", fmt.Sprintf("%T", v)),
 			)
 		}
 	default:
-		return nil, fmt.Errorf("'oauth_scopes' must be a string or an array of strings, got %T", anyValue)
+		return nil, fmt.Errorf("%q must be a string or an array of strings, got %T", key, t)
 	}
 
 	return scopes, nil

@@ -4,13 +4,13 @@ This is the high-level plan for features that are expected to be released within
 
 ## 0-3 Months
 
-1. Finish implementing the OAuth authorization code and JWT bearer flows
+1. Data collection from MongoDB (+ general support for BSON)
 
-2. Data collection from MongoDB (+ general support for BSON)
+2. Respect rate-limiting responses from HTTP servers (425, 429, 503)
 
-3. Respect rate-limiting responses from HTTP servers
+3. Support session cookies (RFC 6265) in OAuth-based HTTP authentication and authorization
 
-4. Support session cookies (RFC 6265) in OAuth-based HTTP authentication and authorization
+4. HTTP 401 responses to OAuth-based collector/sender requests should trigger a token refresh
 
 5. Sharing and single-flight initialization of identical OAuth configurations across clients
 

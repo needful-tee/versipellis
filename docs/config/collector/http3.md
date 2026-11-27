@@ -2,18 +2,18 @@
 
 ## `[collector.http3]` Sub-Section
 
+`method` - HTTP request method, a.k.a. verb, for retrieving data
+
+- Optional
+- Default: `"GET"`
+- Options (case insensitive): `"GET"`, `"PATCH"`, `"POST"`, `"PUT"`
+
 `url` - server address, in the form `"https://host[:port][/path][?query]"`
 
 - Required
 - HTTP/3 does not support insecure HTTP without TLS
 - If the host is an IPv6 address, it must be enclosed in square brackets, e.g., `[fe80::1]`
 - Query parameters may be specified here as a suffix (e.g., `?param1=value1&param2=value2`), but it's recommended to specify them in `query` (see the notes there)
-
-`method` - HTTP request method, a.k.a. verb, for retrieving data
-
-- Optional
-- Default: `"GET"`
-- Options (case insensitive): `"GET"`, `"PATCH"`, `"POST"`, `"PUT"`
 
 `query` - HTTP query parameters
 

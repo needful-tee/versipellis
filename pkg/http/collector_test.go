@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"needful-t.ee/versipellis/internal/sandbox"
 	"needful-t.ee/versipellis/pkg/config"
 	"needful-t.ee/versipellis/pkg/dest"
 )
@@ -225,6 +226,7 @@ func TestLoadBody(t *testing.T) {
 
 func TestCollectorStart(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	tests := []struct {
 		name  string
@@ -302,6 +304,7 @@ func TestCollectorStart(t *testing.T) {
 
 func TestCollectorStartWithFailedOAuthFlow(t *testing.T) {
 	t.Parallel()
+	sandbox.RequireLoopback(t)
 
 	var tokenRequests, dataRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +314,7 @@ func TestCollectorStartWithFailedOAuthFlow(t *testing.T) {
 			return
 		}
 		tokenRequests.Add(1)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contentTypeHeader, "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
 	}))
