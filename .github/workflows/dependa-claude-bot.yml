@@ -6,10 +6,16 @@ name: Dependa-Claude-Bot
 # Two jobs, so the one that reads untrusted web content has no write access:
 #   1. `check`: read-only token. Claude looks for newer versions and edits the files in the checkout.
 #      The result leaves the job as a patch (an artifact).
-#   2. `open-pr`: write token, no Claude. It verifies that the patch only touches marked files, then
-#      commits it to a new branch and opens the pull request.
+#   2. `open-pr`: write token, no Claude. It verifies that the patch only touches marked files,
+#      and only changes version numbers and commit SHAs on marked lines, then commits it to a new
+#      branch (through the API, so that GitHub signs the commit) and opens the pull request.
 #
-# `open-pr` pushes with a short-lived token of a GitHub App that this repository owns, because:
+# Residual risk: `check` runs Claude on untrusted input, so a successful prompt injection could run code in
+# that job, e.g., through `$GITHUB_ENV` (the "Collect the changes" step is hardened against that, but not the
+# upload action) or by writing to this branch's Actions cache scope (which `setup-go` restores in `ci.yml`).
+# Giving workflows that hold secrets `cache: false` would close the latter, at the cost of slower runs.
+#
+# `open-pr` writes with a short-lived token of a GitHub App that this repository owns, because:
 #   - The default `GITHUB_TOKEN` (and the Claude GitHub App) can't change files under `.github/workflows`.
 #   - PRs opened with `GITHUB_TOKEN` don't trigger other workflows (CI, CodeQL, etc.).
 
@@ -28,6 +34,12 @@ permissions:
 jobs:
   check:
     name: Check pinned versions
+    # Only on the default branch: the PR targets it, and a run from another branch would use that branch's
+    # version of this workflow (and its guard) and put that branch's commits in the PR. Skipping this job
+    # also skips `open-pr`. Scheduled runs always use the default branch.
+    if: |
+      github.event_name == 'schedule' ||
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -84,10 +96,9 @@ jobs:
             Check whether the pinned versions in this repository that are marked "not updated by Dependabot"
             need an update, and apply the updates you find.
 
-            The files that contain the marker (case-insensitive) are listed in
-            `${{ runner.temp }}/marked-files.txt`. The marker is in a comment, either on the pinned line itself
-            or just above the block of lines that it applies to. Handle every pinned version it covers
-            (e.g., each architecture's download URL).
+            The files that contain the marker (case-insensitive) are listed in `${{ runner.temp }}/marked-files.txt`.
+            The marker is in a comment, either on the pinned line itself or just above the block of lines that it
+            applies to. Handle every pinned version it covers (e.g., each architecture's download URL).
 
             Rules:
             1. Only stable releases: never pre-releases, release candidates, or drafts.
@@ -125,7 +136,7 @@ jobs:
 
             Otherwise, also write (outside the repository):
             - `${{ runner.temp }}/pr/title.txt`: a single-line PR title. Follow the style of Dependabot's commits
-              (see `git log --oneline -10`), e.g., `:robot: ci(deps): ...` for workflows and
+              (see `.github/dependabot.yml` for the prefixes), e.g., `:robot: ci(deps): ...` for workflows and
               `:robot: build(deps): ...` for Dockerfiles and Go tools.
             - `${{ runner.temp }}/pr/body.md`:
               - The PR description, with a table of each update (what, old version, new version, release date,
@@ -138,9 +149,14 @@ jobs:
               - The last line is: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 
           # https://code.claude.com/docs/en/cli-reference
-          # This is lookup-and-edit work with explicit rules, so Sonnet at medium effort is enough. Raise it
-          # to `--model opus --effort high` if it starts mishandling the Oracle pages or tag resolution.
-          # Edit and Write aren't path-restricted here: `open-pr` rejects patches that touch unmarked files.
+          # This is lookup-and-edit work with explicit rules, so Sonnet at medium effort should be enough.
+          # The action runs Claude in auto mode, so --allowedTools pre-approves these tools but isn't a strict
+          # allow-list: other tool calls go through auto mode's safety check, which may let them run. Don't treat
+          # it as a sandbox. The real boundaries are this job's read-only token and the patch guard in `open-pr`.
+          # The prefix rules are loose too (e.g., `Bash(git grep:*)` also matches `git grep -O<cmd>`).
+          # Edit and Write aren't path-restricted, except by the two deny rules below (deny rules do hold in auto
+          # mode, but only for these file tools, not for Bash): `open-pr` rejects patches that touch unmarked
+          # files, or that change anything but version numbers and commit SHAs on marked lines.
           claude_args: |
             --model sonnet
             --effort medium
@@ -166,18 +182,34 @@ jobs:
               "Bash(git commit:*)"
               "Bash(git push:*)"
               "Bash(gh pr:*)"
+              "Edit(.git/**)"
+              "Edit(//home/runner/work/_temp/_runner_file_commands/**)"
 
       - name: Collect the changes
         id: patch
         if: steps.claude.outcome == 'success'
+        # Claude's step can change what later steps run with (through `$GITHUB_ENV`, `$GITHUB_PATH`, or the
+        # repository's own files), so this step starts a clean shell: no inherited `BASH_ENV`, `LD_*`, `GIT_*`,
+        # or custom `PATH`, and the repository's git config, hooks, and attributes are reset below.
+        shell: >-
+          env -u BASH_ENV -u LD_PRELOAD -u LD_LIBRARY_PATH -u GIT_DIR -u GIT_WORK_TREE -u GIT_EXTERNAL_DIFF
+          -u GIT_CONFIG_COUNT -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM PATH=/usr/local/bin:/usr/bin:/bin
+          bash --noprofile --norc -eo pipefail {0}
         run: |
           if [ -s "${RUNNER_TEMP}/pr/summary.md" ]; then
             cat "${RUNNER_TEMP}/pr/summary.md" >> "$GITHUB_STEP_SUMMARY"
           fi
-          git diff --binary > "${RUNNER_TEMP}/pr/changes.patch"
+
+          # `git diff` can run commands from the repository's config (filters, external diff, fsmonitor, hooks).
+          printf '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n' > .git/config
+          rm -rf .git/hooks .git/info/attributes
+
+          safe_git() { git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+          safe_git diff --no-ext-diff --no-textconv --binary > "${RUNNER_TEMP}/pr/changes.patch"
+
           if [ -s "${RUNNER_TEMP}/pr/changes.patch" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            git diff --stat
+            safe_git diff --no-ext-diff --no-textconv --stat
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::All marked pinned versions are up to date."
@@ -215,7 +247,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ steps.app-token.outputs.token }} # Also used by `git push` below.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Download the changes
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -226,7 +258,6 @@ jobs:
       - name: Commit and open the PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
@@ -242,22 +273,70 @@ jobs:
             exit 1
           fi
 
-          title=":robot: build(deps): Update pinned versions that Dependabot doesn't cover"
-          if [ -s "${pr_dir}/title.txt" ]; then
-            title=$(head -n 1 "${pr_dir}/title.txt" | cut -c1-200)
+          # A file-level check isn't enough, because the marked files include workflows that run with secrets as
+          # soon as the PR opens: the patch may only change version numbers and commit SHAs, and only on marked
+          # lines (or on Oracle download URLs, whose marker is in the comment above them).
+          git apply --index "${pr_dir}/changes.patch"
+          # Only in-place edits of regular, non-executable files: the API commit below can't keep file modes.
+          if git diff --cached --raw | grep -vE '^:100644 100644 [0-9a-f]+ [0-9a-f]+ M'; then
+            echo "::error::The patch creates, deletes, renames, or changes the mode of files (listed above)."
+            exit 1
           fi
+
+          norm() { sed -E 's/[0-9a-f]{40}/<sha>/g; s/[0-9]+/<n>/g'; }
+          while IFS= read -r f; do
+            if ! cmp -s <(git show "HEAD:${f}" | norm) <(git show ":${f}" | norm); then
+              echo "::error file=${f}::The patch changes more than version numbers and commit SHAs."
+              exit 1
+            fi
+          done < <(git diff --cached --name-only)
+
+          unmarked=$(git diff --cached -U0 | grep -E '^-' | grep -vE '^--- (a/|/dev/null)' \
+            | grep -viE 'not updated by dependabot|download\.oracle\.com/' || true)
+          if [ -n "$unmarked" ]; then
+            echo "::error::The patch changes lines that aren't marked as not updated by Dependabot:"
+            echo "$unmarked"
+            exit 1
+          fi
+
+          default_title=":robot: build(deps): Update pinned versions that Dependabot doesn't cover"
+          title=$(head -n 1 "${pr_dir}/title.txt" 2>/dev/null | tr -d '\r' | cut -c1-200 || true)
+          # An empty or blank title (e.g., a blank first line) would make the commit fail.
+          [ -n "${title//[[:space:]]/}" ] || title="$default_title"
           body_file="${pr_dir}/body.md"
           if [ ! -s "$body_file" ]; then
             echo "Updates to the pinned versions that are marked as not updated by Dependabot." > "$body_file"
           fi
 
+          # Create the branch and its commit through the API instead of `git commit` and `git push`:
+          # GitHub signs commits that a GitHub App creates this way (no signing key needed),
+          # and the repository's rules require signed commits. The author is the app itself.
           branch="dependa-claude-bot/$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
-          # Commit as the GitHub App, to match the PR's author.
-          bot_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git apply --index "${pr_dir}/changes.patch"
-          git commit -m "$title"
-          git push --set-upstream origin "$branch"
+          base_sha=$(git rev-parse HEAD)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${branch}" -f sha="${base_sha}" > /dev/null
+
+          additions=$(
+            while IFS= read -r f; do
+              jq -n --arg path "$f" --arg contents "$(git show ":${f}" | base64 -w0)" '{path: $path, contents: $contents}'
+            done < <(git diff --cached --name-only) | jq -s .
+          )
+          commit_oid=$(
+            jq -n --arg repo "$GITHUB_REPOSITORY" --arg branch "$branch" --arg oid "$base_sha" --arg title "$title" \
+              --argjson additions "$additions" '{
+                query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+                variables: {input: {
+                  branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                  message: {headline: $title},
+                  expectedHeadOid: $oid,
+                  fileChanges: {additions: $additions}
+                }}
+              }' | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid
+          )
+          verified=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${commit_oid}" --jq '.commit.verification.verified')
+          if [ "$verified" = true ]; then
+            echo "::notice::Created the verified commit ${commit_oid} on ${branch}."
+          else
+            echo "::warning::Created commit ${commit_oid} on ${branch}, but GitHub doesn't show it as verified."
+          fi
+
           gh pr create --base "$BASE_BRANCH" --head "$branch" --title "$title" --body-file "$body_file"
