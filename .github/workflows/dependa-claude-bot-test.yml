@@ -1,0 +1,35 @@
+name: Dependa-Claude-Bot tests
+
+# Regression tests for the file handling and checks in `dependa-claude-bot.yml` (see the test script's header).
+# They need no secrets or network access: `gh` and the Go module proxy are faked.
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/dependa-claude-bot.yml
+      - .github/workflows/dependa-claude-bot-test.yml
+      - .github/scripts/test-dependa-claude-bot.sh
+      - .github/scripts/testdata/dependa-claude-bot/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/dependa-claude-bot.yml
+      - .github/workflows/dependa-claude-bot-test.yml
+      - .github/scripts/test-dependa-claude-bot.sh
+      - .github/scripts/testdata/dependa-claude-bot/**
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Dependa-Claude-Bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run tests
+        run: bash .github/scripts/test-dependa-claude-bot.sh

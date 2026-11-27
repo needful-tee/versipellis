@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ARG TARGETARCH
 
+# Not updated by Dependabot, check latest versions at:
 # https://www.oracle.com/database/technologies/instant-client/linux-x86-64-downloads.html
 # https://www.oracle.com/database/technologies/instant-client/linux-arm-aarch64-downloads.html
 WORKDIR /opt/oracle
