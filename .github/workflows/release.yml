@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: lurcher/unixODBC
-          ref: v2.3.14 # https://github.com/lurcher/unixODBC/releases
+          ref: v2.3.14 # https://github.com/lurcher/unixODBC/releases (not updated by Dependabot)
           path: unixODBC
       - name: Build release image
         run: docker build -t custom-goreleaser-cross -f Dockerfile.release .
