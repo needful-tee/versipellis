@@ -66,8 +66,8 @@ archives:
       - LICENSE
       - NOTICE
       - README.md
-      - config/**/*
-      - docs/**/*
+      - config/**
+      - docs/**
 
 checksum:
   name_template: '{{.ProjectName}}_v{{.Version}}_checksums.txt'
