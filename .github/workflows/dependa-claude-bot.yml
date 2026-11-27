@@ -5,8 +5,9 @@ name: Dependa-Claude-Bot
 #
 # Two jobs, so the one that reads untrusted web content has no write access:
 #   1. `check`: read-only token. Claude looks for newer versions and edits the files in the checkout.
-#      The changed files leave the job as an artifact. No git runs after Claude in this job, because
-#      Claude's file tools could have changed the config, attributes, or hooks that git reads.
+#      The changed files leave the job as an artifact. None of this job's own steps run git after Claude,
+#      because Claude's file tools could have changed the config, attributes, or hooks that git reads
+#      (`actions/checkout`'s post step does run `git config`: the deny rules below cover what it reads).
 #   2. `open-pr`: write token, no Claude. It copies the changed files over a fresh checkout (only files
 #      that carry the marker there), verifies that only version numbers and commit SHAs changed, and only
 #      on marked lines, and that each new `go install` SHA is its version's tag commit. Then it commits
@@ -98,6 +99,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The job's read-only token, instead of the action's own GitHub App token (which can write).
+          # Keep it: without it, the action also revokes its app token in a later step that runs `bun`,
+          # which would read a `bunfig.toml` that Claude could have planted.
           github_token: ${{ github.token }}
 
           prompt: |
@@ -169,11 +172,12 @@ jobs:
           # This is lookup-and-edit work with explicit rules, so Sonnet at medium effort should be enough.
           # The action runs Claude in auto mode, so --allowedTools pre-approves these tools but isn't a strict
           # allow-list: other tool calls go through auto mode's safety check, which may let them run. Don't treat
-          # it as a sandbox. The real boundaries are this job's read-only token and the checks in `open-pr`.
-          # The prefix rules are loose too (e.g., `Bash(git grep:*)` also matches `git grep -O<cmd>`).
-          # Edit and Write aren't path-restricted, except by the deny rules below (deny rules do hold in auto mode,
-          # but only for these file tools, not for Bash). They keep the file tools away from what runs later in
-          # this job: the runner's command files (`$GITHUB_ENV`, etc.), the actions' code, and git's config.
+          # it as a sandbox. The real boundaries are this job's read-only token and the checks in `open-pr`. The
+          # prefix rules are loose too (e.g., `Bash(git grep:*)` also matches `git grep -O<cmd>`). Edit and Write
+          # aren't path-restricted, except by the deny rules below (deny rules do hold in auto mode, but only for
+          # these file tools, not for Bash). They keep the file tools away from what runs later in this job:
+          # the runner's command files (`$GITHUB_ENV`, etc.), the actions' code, the runner's own files
+          # (e.g., its Node.js binary), and git's config.
           # `open-pr` ignores files that aren't marked, and rejects changes other than version numbers and
           # commit SHAs on marked lines.
           claude_args: |
@@ -207,6 +211,7 @@ jobs:
               "Edit(~/.config/git/**)"
               "Edit(/${{ runner.temp }}/_runner_file_commands/**)"
               "Edit(/${{ steps.marked.outputs.work_dir }}/_actions/**)"
+              "Edit(~/actions-runner/**)"
 
       - name: Collect the changes
         id: patch
@@ -393,7 +398,7 @@ jobs:
             fi
             mod=${BASH_REMATCH[1]} sha=${BASH_REMATCH[2]} ver=${BASH_REMATCH[3]}
             mod_escaped=$(sed -E 's/([A-Z])/!\L\1/g' <<< "$mod") # The proxy's case encoding.
-            want=$(curl -sSf --max-time 30 "https://proxy.golang.org/${mod_escaped}/@v/${ver}.info" \
+            want=$(curl -sSf --retry 3 --max-time 30 "https://proxy.golang.org/${mod_escaped}/@v/${ver}.info" \
               | jq -r '.Origin.Hash // empty' || true)
             if [ "$want" != "$sha" ]; then
               echo "::error::${mod}@${sha} isn't the commit of ${ver} (expected: ${want:-unknown})."

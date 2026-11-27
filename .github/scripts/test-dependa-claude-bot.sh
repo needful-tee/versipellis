@@ -225,6 +225,8 @@ edits() { sedi 's#(gotestsum@[0-9a-f]{40} \# v1\.12\.3)#\1 \&\& curl evil.exampl
 scenario "shell snippet on the marked line" fail
 edits() { sedi 's/OTHER_PORT=8080/OTHER_PORT=8081/' $BLOCK; }
 scenario "number changed after the block's blank line" fail
+edits() { sedi 's/OTHER_VERSION=4\.5\.6/OTHER_VERSION=4.5.7/' $BLOCK; }
+scenario "dotted version changed after the block's blank line" fail
 edits() { sedi 's#sha256:[0-9a-f]{64}#sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff#' $DF; }
 scenario "image digest swapped on an unmarked line" fail
 edits() { sedi 's#https://download\.oracle\.com/#https://download.evil.example/#' $DF; }
