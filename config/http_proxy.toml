@@ -6,4 +6,4 @@ destination = "sender.http"
 address = "0.0.0.0:2678"
 
 [sender.http]
-url = "http://localhost:5356"
+url = "http://0.0.0.0:5356"

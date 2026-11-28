@@ -42,19 +42,19 @@ docker run -d --name my-versi-container \
 ```
 
 - Platforms: Linux (amd64/arm64)
-- Mount volumes / mount points:
+- Volumes / mount points:
   - `/app/config` - app and database configuration files, TLS certificates
   - `/app/data` - [dead-letter queue](./docs/dead_letter_queue.md) (data that was received but not delivered)
-- Ports (optional and configurable):
-  - `2678/tcp` - default port for HTTP/1.1 and HTTP/2 receivers in documentation and examples
-  - `3678/udp` - default port for HTTP/3 receivers in documentation and examples
-  - `4678/tcp` - default port for OAuth 2 callback webhooks
+- Ports (optional, configurable, and used by convention in the documentation and examples):
+  - `2678/tcp` - HTTP/1.1 and HTTP/2 receivers
+  - `3678/udp` - HTTP/3 receivers
+  - `4678/tcp` - OAuth 2 callback webhooks
 - Already bundled and tested with:
   - Oracle Instant Client
   - unixODBC
 
 > [!TIP]
-> When specifying a local listener address for receivers and OAuth webhooks in a **containerized** TOML configuration file, use `"0.0.0.0:port"` instead of `"locahost:port"`, etc.
+> When specifying a local listener address for receivers and OAuth webhooks in a **containerized** TOML configuration file, use `"0.0.0.0:port"` or `"[::]:port"`, Docker's port mappings can't reach loopback listeners inside the container.
 
 ### Installation Option 2: Precompiled Executable Binary
 
