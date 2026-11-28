@@ -80,7 +80,7 @@ type Collector struct {
 	timeout time.Duration
 	format  config.Format
 
-	// Mutually-exclusive connections, depending on the driver type.
+	// Mutually exclusive connections, depending on the driver type.
 	db      *sql.DB
 	pgPool  pgPool
 	usingPG bool

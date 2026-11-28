@@ -50,7 +50,7 @@ type Cache[K comparable, V comparable] interface {
 
 	// Add adds a value to the cache, like [Cache.Set], but only if the key does
 	// not already exist or is expired. It returns true if the item was added,
-	// false otherwise. Either way, it also returns the currently-stored value.
+	// false otherwise. Either way, it also returns the currently stored value.
 	// Note that any non-positive expiration value is treated as "never expires".
 	Add(key K, value V, expiration ...ItemOption) (V, bool)
 

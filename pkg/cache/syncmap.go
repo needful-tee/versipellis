@@ -16,7 +16,7 @@ import (
 // same [Cache] interface as [LeanCache], so they can be used interchangeably.
 //
 // Contrary to popular belief, [sync.Map] is actually much faster than a [sync.RWMutex]-protected
-// map in almost all benchmarks, even the historically-slow scenarios of heavy "dirty" writing.
+// map in almost all benchmarks, even the historically slow scenarios of heavy "dirty" writing.
 // This has been true since Go 1.24: see https://antonz.org/go-1-24/#concurrent-hash-trie-map
 // and https://victoriametrics.com/blog/go-sync-map-hash-trie/.
 type FastCache[K comparable, V comparable] struct {
@@ -91,7 +91,7 @@ func (c *FastCache[K, V]) Set(key K, value V, expiration ...ItemOption) {
 
 // Add adds a value to the cache, like [Cache.Set], but only if the key does
 // not already exist or is expired. It returns true if the item was added,
-// false otherwise. Either way, it also returns the currently-stored value.
+// false otherwise. Either way, it also returns the currently stored value.
 // Note that any non-positive expiration value is treated as "never expires".
 func (c *FastCache[K, V]) Add(key K, value V, expiration ...ItemOption) (V, bool) {
 	newItem := Item[V]{Value: value, Expiration: c.durationOptionToTime(expiration...)}
