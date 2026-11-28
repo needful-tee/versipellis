@@ -79,7 +79,7 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 		return nil, err
 	}
 	var contentType string
-	encoded := c.headers.Get(contentEncodingHeader) != ""
+	encoded := c.headers.Get("Content-Encoding") != ""
 	if c.body, contentType, err = loadBody(cfg, c.method, encoded); err != nil {
 		return nil, err
 	}
@@ -161,21 +161,19 @@ func loadBody(cfg map[string]any, method string, encoded bool) ([]byte, string, 
 	if len(body) == 0 {
 		return nil, "", errors.New("specified HTTP body file is empty: " + path)
 	}
-	return body, bodyContentType(
-		body,
-		path,
-		encoded,
-	), nil // Not trimming leading/trailing whitespaces because this payload may be binary.
+
+	// Not trimming leading/trailing whitespaces because this payload may be binary.
+	return body, bodyContentType(body, path, encoded), nil
 }
 
 // bodyContentType returns the default content type of a configured HTTP request body, or "" if it's unknown.
-// A recognized file extension decides it (the path is empty for inline bodies), regardless of the content.
-// Otherwise, a valid JSON object or array is the only content that is recognized, because generic sniffing
-// (e.g., [http.DetectContentType]) mislabels JSON and URL-encoded bodies as plain text. This function
-// never modifies the body, and it's meant to run once per collector, not per request.
+//   - A recognized file extension decides it (the path is empty for inline bodies), regardless of the content.
+//   - Otherwise, a valid JSON object or array is the only content that is recognized, because generic sniffing
+//     (e.g., [http.DetectContentType]) mislabels JSON and URL-encoded bodies as plain text.
+//   - An encoded body (i.e. with a configured "Content-Encoding" header) has no default: its file extension
+//     and its bytes describe the encoded form (e.g., gzip), not the content that the server will decode.
 //
-// An encoded body (i.e. with a configured "Content-Encoding" header) has no default: its file extension
-// and its bytes describe the encoded form (e.g., gzip), not the content that the server will decode.
+// This function never modifies the body, and it's meant to run once per collector, not per request.
 func bodyContentType(body []byte, path string, encoded bool) string {
 	if encoded {
 		return ""

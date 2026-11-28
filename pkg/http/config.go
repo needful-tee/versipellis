@@ -27,9 +27,8 @@ const (
 
 	defaultRequestTimeout = 5 * time.Second
 
-	contentTypeHeader     = "Content-Type"
-	contentEncodingHeader = "Content-Encoding"
-	formContentType       = "application/x-www-form-urlencoded"
+	contentTypeHeader = "Content-Type"
+	formContentType   = "application/x-www-form-urlencoded"
 )
 
 func parseMethod(rawMethod, action string) (string, error) {

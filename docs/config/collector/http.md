@@ -71,11 +71,12 @@
 - Use at most one of them, and not together with `form` (all three are mutually exclusive):
   - Inline - usually when the content is small and simple
   - Relative or absolute path to a file (e.g., `"config/body.json"` or `"/path/body.xml"`) - when it's large, complex, or sensitive
-- May set the `Content-Type` header automatically, but `headers` can override or remove it:
-  - `headers` with a `Content-Encoding` (e.g., for a compressed `body_file`) → the header is not sent, so specify the `Content-Type` of the decoded content in `headers` too
-  - Otherwise, `body_file` with a recognized extension (e.g., `.csv`, `.html`, `.json`, `.ndjson`) → the extension's MIME type, regardless of the file's content
-  - Otherwise, content that is a valid JSON object or array → `"application/json"`
-  - Otherwise, the header is not sent
+- Sets the `Content-Type` header automatically in either of these cases:
+  - `body_file` has a recognized extension (e.g., `.csv`, `.html`, `.json`, `.ndjson`) → the extension's MIME type, regardless of the file's content
+  - The content (in `body` or `body_file`) is a valid JSON object or array → `"application/json"`
+- Except when the `headers` table specifies:
+  - `Content-Type` (which overrides the automatic value, or removes this header)
+  - `Content-Encoding`, e.g., `"gzip"` (the `Content-Type` header will be sent only if you specify it too)
 
 `form` - HTTP request body in the form of URL-encoded key-value pairs
 
