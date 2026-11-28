@@ -1,16 +1,21 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/oauth2"
 
@@ -117,8 +122,8 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 }
 
 // loadBody returns the configured HTTP request body (if there is one), from one of 3 mutually exclusive sources:
-// an inline string, a file, or a table of form parameters. It also returns the body's default content type,
-// which is known only for forms, and which an explicitly configured "Content-Type" header should override.
+// an inline string, a file, or a table of form parameters. It also returns the body's default content type
+// (if known - see [bodyContentType]), which an explicitly configured "Content-Type" header should override.
 func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 	inline := config.Value(cfg, "body", "") // Not trimming leading/trailing whitespaces because this payload may be signed.
 	path := strings.TrimSpace(config.Value(cfg, "body_file", ""))
@@ -142,7 +147,8 @@ func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 	case sources > 1:
 		return nil, "", errors.New(`"body", "body_file", and "form" are mutually exclusive, specify at most one`)
 	case inline != "":
-		return []byte(inline), "", nil
+		body := []byte(inline)
+		return body, bodyContentType(body, ""), nil
 	case form != nil:
 		return form, formContentType, nil
 	}
@@ -154,7 +160,36 @@ func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 	if len(body) == 0 {
 		return nil, "", errors.New("specified HTTP body file is empty: " + path)
 	}
-	return body, "", nil // Not trimming leading/trailing whitespaces because this payload may be binary.
+	return body, bodyContentType(body, path), nil // Not trimming leading/trailing whitespaces because this payload may be binary.
+}
+
+// bodyContentType returns the default content type of a configured HTTP request body, or "" if it's unknown.
+// A recognized file extension decides it (the path is empty for inline bodies), regardless of the content.
+// Otherwise, a valid JSON object or array is the only content that is recognized, because generic sniffing
+// (e.g., [http.DetectContentType]) mislabels JSON and URL-encoded bodies as plain text. This function
+// never modifies the body, and it's meant to run once per collector, not per request.
+func bodyContentType(body []byte, path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch {
+	case ext == ".json":
+		return codec.JSON.ContentType()
+	case ext == ".jsonl" || ext == ".ndjson":
+		return codec.NDJSON.ContentType()
+	case ext != "":
+		if t := mime.TypeByExtension(ext); t != "" {
+			return t
+		}
+	}
+
+	// Cheap rejection of everything else (including JSON scalars, which are too ambiguous) before validating the whole body.
+	switch first, _ := utf8.DecodeRune(bytes.TrimLeft(body, " \t\r\n")); first {
+	case '{', '[':
+		// Duplicate names are discouraged but still valid JSON, and nothing here decodes the body.
+		if jsontext.Value(body).IsValid(jsontext.AllowDuplicateNames(true)) {
+			return codec.JSON.ContentType()
+		}
+	}
+	return ""
 }
 
 // Start connects to the configured HTTP server and starts sending requests to it. This method

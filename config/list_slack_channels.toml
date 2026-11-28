@@ -36,7 +36,7 @@ query = { exclude_archived = "true", limit = "100", types = "public_channel" }
 # [collector.http3]
 # method = "POST"
 # url = "https://slack.com/api/conversations.list"
-# headers = { content-type = "application/json" }
+# headers = { content-type = "application/json" } # Optional, JSON content type can be auto-detected.
 # body = "{ \"exclude_archived\": true, \"limit\": 100, \"types\": \"public_channel\" }"
 
 [collector.http3.auth]
