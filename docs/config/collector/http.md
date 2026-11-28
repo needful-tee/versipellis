@@ -75,7 +75,7 @@
   - `body_file` has a recognized extension (e.g., `.csv`, `.html`, `.json`, `.ndjson`) → the extension's MIME type, regardless of the file's content
   - The content (in `body` or `body_file`) is a valid JSON object or array → `"application/json"`
 - Except when the `headers` table specifies:
-  - `Content-Type` (which overrides the automatic value, or removes this header)
+  - `Content-Type` (which overrides the automatic value, or removes this header if the value is `""`)
   - `Content-Encoding`, e.g., `"gzip"` (the `Content-Type` header will be sent only if you specify it too)
 
 `form` - HTTP request body in the form of URL-encoded key-value pairs
