@@ -157,6 +157,32 @@ func TestNewCollector(t *testing.T) {
 			wantTimeout: defaultRequestTimeout,
 		},
 		{
+			name: "encoded_json_body_without_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "body": `{"a": 1}`,
+				"headers": map[string]any{"content-encoding": "gzip"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentEncodingHeader: {"gzip"}},
+			wantBody:    `{"a": 1}`,
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "encoded_form_with_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "form": map[string]any{"a": "1"},
+				"headers": map[string]any{"content-encoding": "gzip"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentEncodingHeader: {"gzip"}, contentTypeHeader: {formContentType}},
+			wantBody:    "a=1",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
 			name: "body_without_default_content_type",
 			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
 			cfg:  map[string]any{"url": "https://example.com", "method": "POST", "body": "a=1"},
@@ -291,6 +317,8 @@ func TestLoadBody(t *testing.T) {
 		"json_no_ext":    jsonObject,
 		"text_no_ext":    bodyWithSpaces,
 		"json.unknown-x": jsonObject,
+		"valid.json":     jsonObject,
+		"valid.json.gz":  "\x1f\x8b\x08\x00",
 		"text.unknown-x": bodyWithSpaces,
 	}
 	for name, content := range files {
@@ -307,6 +335,10 @@ func TestLoadBody(t *testing.T) {
 	if textType == "" || textType == jsonType {
 		t.Fatalf("unusable MIME type for the .txt file extension: %q", textType)
 	}
+	gzipType := mime.TypeByExtension(".gz")
+	if gzipType == "" || gzipType == jsonType {
+		t.Fatalf("unusable MIME type for the .gz file extension: %q", gzipType)
+	}
 
 	tests := []struct {
 		name     string
@@ -314,6 +346,7 @@ func TestLoadBody(t *testing.T) {
 		path     string
 		form     any
 		method   string
+		encoded  bool
 		want     string
 		wantType string
 		wantErr  bool
@@ -507,6 +540,37 @@ func TestLoadBody(t *testing.T) {
 			wantType: jsonType,
 		},
 		{
+			name:     "compressed_file_without_content_encoding",
+			path:     filepath.Join(tempDir, "valid.json.gz"),
+			want:     "\x1f\x8b\x08\x00",
+			wantType: gzipType,
+		},
+		{
+			name:    "compressed_file_with_content_encoding",
+			path:    filepath.Join(tempDir, "valid.json.gz"),
+			encoded: true,
+			want:    "\x1f\x8b\x08\x00",
+		},
+		{
+			name:    "json_file_with_content_encoding",
+			path:    filepath.Join(tempDir, "valid.json"),
+			encoded: true,
+			want:    jsonObject,
+		},
+		{
+			name:    "inline_json_with_content_encoding",
+			body:    jsonObject,
+			encoded: true,
+			want:    jsonObject,
+		},
+		{
+			name:     "form_with_content_encoding",
+			form:     map[string]any{"a": "1"},
+			encoded:  true,
+			want:     "a=1",
+			wantType: formContentType,
+		},
+		{
 			name: "text_file_with_unrecognized_extension",
 			path: filepath.Join(tempDir, "text.unknown-x"),
 			want: bodyWithSpaces,
@@ -517,7 +581,7 @@ func TestLoadBody(t *testing.T) {
 			t.Parallel()
 
 			cfg := map[string]any{"body": tt.body, "body_file": tt.path, "form": tt.form}
-			gotBytes, gotType, gotErr := loadBody(cfg, tt.method)
+			gotBytes, gotType, gotErr := loadBody(cfg, tt.method, tt.encoded)
 			if (gotErr != nil) != tt.wantErr {
 				t.Fatalf("loadBody() error = %v, wantErr %v", gotErr, tt.wantErr)
 			}

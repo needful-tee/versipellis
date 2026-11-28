@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"golang.org/x/oauth2"
 
@@ -80,7 +79,8 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 		return nil, err
 	}
 	var contentType string
-	if c.body, contentType, err = loadBody(cfg, c.method); err != nil {
+	encoded := c.headers.Get(contentEncodingHeader) != ""
+	if c.body, contentType, err = loadBody(cfg, c.method, encoded); err != nil {
 		return nil, err
 	}
 	setContentType(c.headers, contentType)
@@ -124,7 +124,8 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 // loadBody returns the configured HTTP request body (if there is one), from one of 3 mutually exclusive sources:
 // an inline string, a file, or a table of form parameters. It also returns the body's default content type
 // (if known - see [bodyContentType]), which an explicitly configured "Content-Type" header should override.
-func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
+// The encoded argument reports whether a "Content-Encoding" header is configured for the body.
+func loadBody(cfg map[string]any, method string, encoded bool) ([]byte, string, error) {
 	inline := config.Value(cfg, "body", "") // Not trimming leading/trailing whitespaces because this payload may be signed.
 	path := strings.TrimSpace(config.Value(cfg, "body_file", ""))
 	form, err := parseForm(cfg["form"], "collector")
@@ -148,7 +149,7 @@ func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 		return nil, "", errors.New(`"body", "body_file", and "form" are mutually exclusive, specify at most one`)
 	case inline != "":
 		body := []byte(inline)
-		return body, bodyContentType(body, ""), nil
+		return body, bodyContentType(body, "", encoded), nil
 	case form != nil:
 		return form, formContentType, nil
 	}
@@ -160,7 +161,11 @@ func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 	if len(body) == 0 {
 		return nil, "", errors.New("specified HTTP body file is empty: " + path)
 	}
-	return body, bodyContentType(body, path), nil // Not trimming leading/trailing whitespaces because this payload may be binary.
+	return body, bodyContentType(
+		body,
+		path,
+		encoded,
+	), nil // Not trimming leading/trailing whitespaces because this payload may be binary.
 }
 
 // bodyContentType returns the default content type of a configured HTTP request body, or "" if it's unknown.
@@ -168,7 +173,14 @@ func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 // Otherwise, a valid JSON object or array is the only content that is recognized, because generic sniffing
 // (e.g., [http.DetectContentType]) mislabels JSON and URL-encoded bodies as plain text. This function
 // never modifies the body, and it's meant to run once per collector, not per request.
-func bodyContentType(body []byte, path string) string {
+//
+// An encoded body (i.e. with a configured "Content-Encoding" header) has no default: its file extension
+// and its bytes describe the encoded form (e.g., gzip), not the content that the server will decode.
+func bodyContentType(body []byte, path string, encoded bool) string {
+	if encoded {
+		return ""
+	}
+
 	ext := strings.ToLower(filepath.Ext(path))
 	switch {
 	case ext == ".json":
@@ -182,12 +194,13 @@ func bodyContentType(body []byte, path string) string {
 	}
 
 	// Cheap rejection of everything else (including JSON scalars, which are too ambiguous) before validating the whole body.
-	switch first, _ := utf8.DecodeRune(bytes.TrimLeft(body, " \t\r\n")); first {
-	case '{', '[':
-		// Duplicate names are discouraged but still valid JSON, and nothing here decodes the body.
-		if jsontext.Value(body).IsValid(jsontext.AllowDuplicateNames(true)) {
-			return codec.JSON.ContentType()
-		}
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return ""
+	}
+	// Duplicate names are discouraged but still valid JSON, and nothing here decodes the body.
+	if jsontext.Value(body).IsValid(jsontext.AllowDuplicateNames(true)) {
+		return codec.JSON.ContentType()
 	}
 	return ""
 }

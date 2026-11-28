@@ -72,7 +72,8 @@
   - Inline - usually when the content is small and simple
   - Relative or absolute path to a file (e.g., `"config/body.json"` or `"/path/body.xml"`) - when it's large, complex, or sensitive
 - May set the `Content-Type` header automatically, but `headers` can override or remove it:
-  - `body_file` with a recognized extension (e.g., `.csv`, `.html`, `.json`, `.ndjson`) → the extension's MIME type, regardless of the file's content
+  - `headers` with a `Content-Encoding` (e.g., for a compressed `body_file`) → the header is not sent, so specify the `Content-Type` of the decoded content in `headers` too
+  - Otherwise, `body_file` with a recognized extension (e.g., `.csv`, `.html`, `.json`, `.ndjson`) → the extension's MIME type, regardless of the file's content
   - Otherwise, content that is a valid JSON object or array → `"application/json"`
   - Otherwise, the header is not sent
 
