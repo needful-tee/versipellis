@@ -78,10 +78,7 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 	if c.body, contentType, err = loadBody(cfg, c.method); err != nil {
 		return nil, err
 	}
-	// Checking the header's presence, not its value, so even an explicitly empty one overrides the default.
-	if contentType != "" && c.headers.Values(contentTypeHeader) == nil {
-		c.headers.Set(contentTypeHeader, contentType)
-	}
+	setContentType(c.headers, contentType)
 	c.maxBodySize = parseByteSize(cfg, "max_body_size", c.Name, defaultMaxBodySize)
 	c.maxHeaderSize = parseByteSize(cfg, "max_headers_size", c.Name, defaultMaxHeaderSize)
 
@@ -143,7 +140,7 @@ func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 	case method == http.MethodGet:
 		return nil, "", errors.New("HTTP GET requests cannot have a body")
 	case sources > 1:
-		return nil, "", errors.New("HTTP body string, body file, and form are mutually exclusive, specify only one")
+		return nil, "", errors.New(`"body", "body_file", and "form" are mutually exclusive, specify at most one`)
 	case inline != "":
 		return []byte(inline), "", nil
 	case form != nil:

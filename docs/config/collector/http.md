@@ -57,6 +57,7 @@
 
 - Optional
 - TOML syntax options: same as the `query` section above
+- `Content-Type` override: an explicitly empty value (`content-type = ""`) means this header is not sent at all, not even with an automatic value
 - Multiple values per header: the TOML file format does not allow multiple instances of the same field, so if you want to specify a header with multiple values, specify them as a single comma-separated string:
 
   ```toml
@@ -76,7 +77,7 @@
 - Optional
 - Not allowed when `method = "GET"`
 - Mutually exclusive with `body` and `body_file`, but not with `query`
-- Sets the `Content-Type` header to `"application/x-www-form-urlencoded"`, but `headers` can override it
+- Sets the `Content-Type` header to `"application/x-www-form-urlencoded"`, but `headers` can override or remove it
 - TOML syntax options: same as the `query` section above
 
 `max_body_size` - maximum byte size of a server response's whole body

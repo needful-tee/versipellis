@@ -87,7 +87,20 @@ func TestNewCollector(t *testing.T) {
 			},
 			wantURL:     "https://example.com",
 			wantMethod:  http.MethodPost,
-			wantHeaders: http.Header{contentTypeHeader: {""}},
+			wantHeaders: http.Header{}, // Neither the default content type nor an empty one.
+			wantBody:    "a=1",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "body_with_explicit_empty_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "body": "a=1",
+				"headers": map[string]any{"content-type": "", "accept": "text/plain"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{"Accept": {"text/plain"}},
 			wantBody:    "a=1",
 			wantTimeout: defaultRequestTimeout,
 		},

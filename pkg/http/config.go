@@ -114,6 +114,21 @@ func parseHeaders(rawCfg any, role string) (http.Header, error) {
 	return headers, nil
 }
 
+// setContentType sets the given default content type (if there is one) in the given headers, unless they
+// already specify one. An explicitly empty "Content-Type" header means "don't send it at all" (not even
+// the default one), so it's removed: an empty value isn't a valid media type, and servers may reject it.
+func setContentType(h http.Header, defaultType string) {
+	if _, found := h[contentTypeHeader]; !found {
+		if defaultType != "" {
+			h.Set(contentTypeHeader, defaultType)
+		}
+		return
+	}
+	if h.Get(contentTypeHeader) == "" {
+		h.Del(contentTypeHeader)
+	}
+}
+
 func parseByteSize(cfg map[string]any, key, name string, defaultValue int64) int64 {
 	value := config.Value(cfg, key, defaultValue)
 	if value <= 0 {

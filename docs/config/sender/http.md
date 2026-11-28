@@ -57,6 +57,7 @@
 
 - Optional
 - TOML syntax options: same as the `query` section above
+- `Content-Type` override: an explicitly empty value (`content-type = ""`) means this header is not sent at all, not even with an automatic value
 - Multiple values per header: the TOML file format does not allow multiple instances of the same field, so if you want to specify a header with multiple values, specify them as a single comma-separated string:
 
   ```toml
@@ -79,7 +80,7 @@
   - `"json_array"` (always an array, even when there are fewer than 2 objects)
   - `"ndjson"` ([NDJSON](https://ndjson.com/), a.k.a. JSONL)
 - This overrides the `format` setting of the source collector or receiver
-- This also sets the HTTP header `Content-Type` automatically, unless you override it in `headers`
+- This also sets the HTTP header `Content-Type` automatically, unless you override or remove it in `headers`
 - Exception: opaque byte payloads and proxied HTTP requests and responses are sent as-is, ignoring this setting
 
 `concurrency_limit` - how many requests are allowed to be in progress at any time

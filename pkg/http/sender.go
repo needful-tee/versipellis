@@ -362,9 +362,7 @@ func (s *Sender) sendBlob(ctx context.Context, body []byte, format config.Format
 	}
 
 	outHdr := s.headers.Clone()
-	if outHdr.Get(contentTypeHeader) == "" {
-		outHdr.Set(contentTypeHeader, http.DetectContentType(body))
-	}
+	setContentType(outHdr, http.DetectContentType(body))
 
 	reject := func() string { return deadLetter(ctx, s.fallback, flow.Blobs{body}, format) }
 	s.sendWithConcurrencyLimit(func() {
@@ -397,9 +395,7 @@ func (s *Sender) sendStructured(
 		data, encode = nil, nil
 
 		outHdr := s.headers.Clone()
-		if outHdr.Get(contentTypeHeader) == "" {
-			outHdr.Set(contentTypeHeader, contentType)
-		}
+		setContentType(outHdr, contentType)
 
 		s.sendWithRetries(ctx, s.url.Clone(), outHdr, retryableBody(body), int64(len(body)), func() string {
 			return deadLetter(ctx, s.fallback, flow.Blobs{body}, format)
@@ -420,6 +416,7 @@ func (s *Sender) sendHTTPRequest(ctx context.Context, req *http.Request) {
 
 	outHdr := s.headers.Clone()
 	copyHeaders(req.Header, outHdr, true)
+	setContentType(outHdr, "") // No default, but still enforce an explicitly empty one.
 
 	if req.Body == nil && req.GetBody == nil {
 		reject := func() string { return s.rejectRequest(ctx, req, nil) }
@@ -478,6 +475,7 @@ func (s *Sender) sendHTTPResponse(ctx context.Context, resp *http.Response) {
 
 	outHdr := s.headers.Clone()
 	copyHeaders(resp.Header, outHdr, false)
+	setContentType(outHdr, "") // No default, but still enforce an explicitly empty one.
 
 	if b, ok := resp.Body.(bodyProvider); ok {
 		// Memory optimization, due to the same reason as in [Sender.sendHTTPRequest], but
