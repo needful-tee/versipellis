@@ -30,8 +30,91 @@ func TestNewCollector(t *testing.T) {
 		wantURL     string
 		wantMethod  string
 		wantHeaders http.Header
+		wantBody    string
 		wantTimeout time.Duration
 	}{
+		{
+			name:    "invalid_form_type",
+			base:    &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg:     map[string]any{"url": "https://example.com", "method": "POST", "form": "a=1"},
+			wantErr: true,
+		},
+		{
+			name:    "form_with_get_method",
+			base:    &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg:     map[string]any{"url": "https://example.com", "form": map[string]any{"a": "1"}},
+			wantErr: true,
+		},
+		{
+			name: "form_with_body",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "body": "a=1", "form": map[string]any{"a": "1"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "form_with_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "PUT", "form": map[string]any{"a": "1"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPut,
+			wantHeaders: http.Header{contentTypeHeader: {formContentType}},
+			wantBody:    "a=1",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "form_with_explicit_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "form": map[string]any{"a": "1"},
+				"headers": map[string]any{"content-type": "text/plain"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentTypeHeader: {"text/plain"}},
+			wantBody:    "a=1",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "form_with_explicit_empty_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "form": map[string]any{"a": "1"},
+				"headers": map[string]any{"content-type": ""},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentTypeHeader: {""}},
+			wantBody:    "a=1",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "form_with_query",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com?q1=1", "method": "POST",
+				"query": map[string]any{"q2": "2"}, "form": map[string]any{"f1": "1", "f2": "2"},
+			},
+			wantURL:     "https://example.com?q1=1&q2=2",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentTypeHeader: {formContentType}},
+			wantBody:    "f1=1&f2=2",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "body_without_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg:  map[string]any{"url": "https://example.com", "method": "POST", "body": "a=1"},
+
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{},
+			wantBody:    "a=1",
+			wantTimeout: defaultRequestTimeout,
+		},
 		{
 			name:    "invalid_url",
 			base:    &config.BaseCollector{Type: config.CollectorTypeHTTP},
@@ -130,6 +213,9 @@ func TestNewCollector(t *testing.T) {
 			if !reflect.DeepEqual(coll.headers, tt.wantHeaders) {
 				t.Errorf("Collector.headers = %+v, want %+v", coll.headers, tt.wantHeaders)
 			}
+			if got := string(coll.body); got != tt.wantBody {
+				t.Errorf("Collector.body = %q, want %q", got, tt.wantBody)
+			}
 			if coll.timeout != tt.wantTimeout {
 				t.Errorf("Collector.timeout = %v, want %v", coll.timeout, tt.wantTimeout)
 			}
@@ -153,15 +239,74 @@ func TestLoadBody(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		body    string
-		path    string
-		method  string
-		want    string
-		wantErr bool
+		name     string
+		body     string
+		path     string
+		form     any
+		method   string
+		want     string
+		wantType string
+		wantErr  bool
 	}{
 		{
-			name:    "no_body_or_file",
+			name:     "valid_form",
+			form:     map[string]any{"b": "2", "a": "1"},
+			method:   http.MethodPost,
+			want:     "a=1&b=2",
+			wantType: formContentType,
+		},
+		{
+			name: "empty_form_is_no_body",
+			form: map[string]any{},
+		},
+		{
+			name:   "empty_form_with_get_method",
+			form:   map[string]any{},
+			method: http.MethodGet,
+		},
+		{
+			name: "empty_form_with_inline_body",
+			body: bodyWithSpaces,
+			form: map[string]any{},
+			want: bodyWithSpaces,
+		},
+		{
+			name:    "valid_form_with_get_method",
+			form:    map[string]any{"a": "1"},
+			method:  http.MethodGet,
+			wantErr: true,
+		},
+		{
+			name:    "both_form_and_body",
+			body:    bodyWithSpaces,
+			form:    map[string]any{"a": "1"},
+			wantErr: true,
+		},
+		{
+			name:    "both_form_and_file",
+			path:    filepath.Join(tempDir, "body.txt"),
+			form:    map[string]any{"a": "1"},
+			wantErr: true,
+		},
+		{
+			name:    "form_and_body_and_file",
+			body:    bodyWithSpaces,
+			path:    filepath.Join(tempDir, "body.txt"),
+			form:    map[string]any{"a": "1"},
+			wantErr: true,
+		},
+		{
+			name:    "form_not_a_table",
+			form:    "a=1",
+			wantErr: true,
+		},
+		{
+			name:    "form_value_not_a_string",
+			form:    map[string]any{"a": int64(1)},
+			wantErr: true,
+		},
+		{
+			name:    "no_body_or_file_or_form",
 			wantErr: false,
 		},
 		{
@@ -212,13 +357,16 @@ func TestLoadBody(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := map[string]any{"body": tt.body, "body_file": tt.path}
-			gotBytes, gotErr := loadBody(cfg, tt.method)
+			cfg := map[string]any{"body": tt.body, "body_file": tt.path, "form": tt.form}
+			gotBytes, gotType, gotErr := loadBody(cfg, tt.method)
 			if (gotErr != nil) != tt.wantErr {
 				t.Fatalf("loadBody() error = %v, wantErr %v", gotErr, tt.wantErr)
 			}
 			if gotStr := string(gotBytes); gotStr != tt.want {
 				t.Fatalf("loadBody() got = %q, want %q", gotStr, tt.want)
+			}
+			if gotType != tt.wantType {
+				t.Fatalf("loadBody() content type = %q, want %q", gotType, tt.wantType)
 			}
 		})
 	}

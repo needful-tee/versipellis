@@ -22,10 +22,6 @@ import (
 	"needful-t.ee/versipellis/pkg/flow"
 )
 
-const (
-	contentTypeHeader = "Content-Type"
-)
-
 var defaultBatchLimits = flow.Limits{}
 
 const (

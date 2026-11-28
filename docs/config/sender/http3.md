@@ -15,7 +15,7 @@
 - If the host is an IPv6 address, it must be enclosed in square brackets, e.g., `[fe80::1]`
 - Query parameters may be specified here as a suffix (e.g., `?param1=value1&param2=value2`), but it's recommended to specify them in `query` (see the notes there)
 
-`query` - HTTP query parameters
+`query` - HTTP URL query parameters
 
 - Optional
 - Query parameters may be specified as a suffix in `url`, but it's recommended to specify them here:
@@ -57,43 +57,11 @@
 `headers` - HTTP request headers
 
 - Optional
-- The TOML file format does not allow multiple instances of the same field, so if you want to specify a header with multiple values, specify them as a single comma-separated string:
+- TOML syntax options: same as the `query` section above
+- Multiple values per header: the TOML file format does not allow multiple instances of the same field, so if you want to specify a header with multiple values, specify them as a single comma-separated string:
 
   ```toml
   accept = "text/plain, application/json, application/xml"
-  ```
-
-- The TOML file format supports multiple representation options for key-value pairs:
-
-  ```toml
-  [sender.http3]
-  # ...
-  headers = { header1 = "value1", header2 = "value2" }
-  ```
-
-  ```toml
-  [sender.http3]
-  # ...
-  headers = {
-      header1 = "value1",
-      header2 = "value2",
-  }
-  ```
-
-  ```toml
-  [sender.http3]
-  # ...
-  headers.header1 = "value1"
-  headers.header2 = "value2"
-  ```
-
-  ```toml
-  [sender.http3]
-  # ...
-
-  [sender.http3.headers]
-  header1 = "value1"
-  header2 = "value2"
   ```
 
 `timeout` - maximum amount of time for each HTTP client request to complete

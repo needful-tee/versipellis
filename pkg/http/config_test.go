@@ -51,13 +51,13 @@ func TestParseQuery(t *testing.T) {
 			name: "nil_raw_leaves_url_untouched",
 			url:  "https://example.com?z=9&a=1",
 			cfg:  nil,
-			want: "z=9&a=1", // Not re-encoded/sorted, since mergeQuery returns early.
+			want: "z=9&a=1", // Not re-encoded/sorted, since there are no configured pairs.
 		},
 		{
 			name: "empty_table_does_not_reencode_existing_query",
 			url:  "https://example.com?z=9&a=1",
 			cfg:  map[string]any{},
-			want: "z=9&a=1", // Not re-encoded/sorted, since mergeQuery returns early.
+			want: "z=9&a=1", // Not re-encoded/sorted, since there are no configured pairs.
 		},
 		{
 			name: "adds_new_params_to_existing_query",
@@ -105,6 +105,81 @@ func TestParseQuery(t *testing.T) {
 			}
 			if !tt.wantErr && u.RawQuery != tt.want {
 				t.Errorf("parseQuery() RawQuery = %q, want %q", u.RawQuery, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseForm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cfg     any
+		want    url.Values
+		wantErr bool
+	}{
+		{
+			name: "nil_raw",
+			cfg:  nil,
+		},
+		{
+			name: "empty_table",
+			cfg:  map[string]any{},
+		},
+		{
+			name: "single_param",
+			cfg:  map[string]any{"a": "1"},
+			want: url.Values{"a": {"1"}},
+		},
+		{
+			name: "multiple_params",
+			cfg:  map[string]any{"b": "2", "a": "1", "c": ""},
+			want: url.Values{"a": {"1"}, "b": {"2"}, "c": {""}},
+		},
+		{
+			name: "special_characters",
+			cfg:  map[string]any{"k&=": "a b&c=d+e/é?"},
+			want: url.Values{"k&=": {"a b&c=d+e/é?"}},
+		},
+		{
+			name:    "raw_not_a_table",
+			cfg:     "a=1",
+			wantErr: true,
+		},
+		{
+			name:    "value_not_a_string",
+			cfg:     map[string]any{"a": int64(1)},
+			wantErr: true,
+		},
+		{
+			name:    "one_value_not_a_string",
+			cfg:     map[string]any{"a": "1", "b": true},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, gotErr := parseForm(tt.cfg, "role")
+			if (gotErr != nil) != tt.wantErr {
+				t.Fatalf("parseForm() error = %v, wantErr %v", gotErr, tt.wantErr)
+			}
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("parseForm() = %q, want nil", got)
+				}
+				return
+			}
+
+			// Decoding the body (like a server would) checks its escaping, without asserting the exact encoding.
+			decoded, err := url.ParseQuery(string(got))
+			if err != nil {
+				t.Fatalf("parseForm() = %q, which is not a valid URL-encoded form: %v", got, err)
+			}
+			if !reflect.DeepEqual(decoded, tt.want) {
+				t.Errorf("parseForm() = %q, decoded as %v, want %v", got, decoded, tt.want)
 			}
 		})
 	}
