@@ -14,7 +14,7 @@
 - If the host is an IPv6 address, it must be enclosed in square brackets, e.g., `[fe80::1]`
 - Query parameters may be specified here as a suffix (e.g., `?param1=value1&param2=value2`), but it's recommended to specify them in `query` (see the notes there)
 
-`query` - HTTP query parameters
+`query` - HTTP URL query parameters
 
 - Optional
 - Query parameters may be specified as a suffix in `url`, but it's recommended to specify them here:
@@ -56,52 +56,29 @@
 `headers` - HTTP request headers
 
 - Optional
-- The TOML file format does not allow multiple instances of the same field, so if you want to specify a header with multiple values, specify them as a single comma-separated string:
+- TOML syntax options: same as the `query` section above
+- `Content-Type` override: an explicitly empty value (`content-type = ""`) means this header is not sent at all, not even with an automatic value
+- Multiple values per header: the TOML file format does not allow multiple instances of the same field, so if you want to specify a header with multiple values, specify them as a single comma-separated string:
 
   ```toml
   accept = "text/plain, application/json, application/xml"
-  ```
-
-- The TOML file format supports multiple representation options for key-value pairs:
-
-  ```toml
-  [collector.http]
-  # ...
-  headers = { header1 = "value1", header2 = "value2" }
-  ```
-
-  ```toml
-  [collector.http]
-  # ...
-  headers = {
-      header1 = "value1",
-      header2 = "value2",
-  }
-  ```
-
-  ```toml
-  [collector.http]
-  # ...
-  headers.header1 = "value1"
-  headers.header2 = "value2"
-  ```
-
-  ```toml
-  [collector.http]
-  # ...
-
-  [collector.http.headers]
-  header1 = "value1"
-  header2 = "value2"
   ```
 
 `body` or `body_file` - HTTP request body
 
 - Optional
 - Not allowed when `method = "GET"`
-- Use at most one of them, not both (they're mutually exclusive):
+- Use at most one of them, and not together with `form` (all three are mutually exclusive):
   - Inline - usually when the content is small and simple
   - Relative or absolute path to a file (e.g., `"config/body.json"` or `"/path/body.xml"`) - when it's large, complex, or sensitive
+
+`form` - HTTP request body in the form of URL-encoded key-value pairs
+
+- Optional
+- Not allowed when `method = "GET"`
+- Mutually exclusive with `body` and `body_file`, but not with `query`
+- Sets the `Content-Type` header to `"application/x-www-form-urlencoded"`, but `headers` can override or remove it
+- TOML syntax options: same as the `query` section above
 
 `max_body_size` - maximum byte size of a server response's whole body
 

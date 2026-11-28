@@ -26,6 +26,9 @@ const (
 	defaultMaxHeaderSize int64 = 1 << 20   // 1 MiB.
 
 	defaultRequestTimeout = 5 * time.Second
+
+	contentTypeHeader = "Content-Type"
+	formContentType   = "application/x-www-form-urlencoded"
 )
 
 func parseMethod(rawMethod, action string) (string, error) {
@@ -43,28 +46,45 @@ func parseMethod(rawMethod, action string) (string, error) {
 // It overrides any existing parameters from the original URL with the same name,
 // and returns an error if the type of any configured value isn't a string.
 func parseQuery(u *url.URL, rawCfg any, role string) error {
+	values := u.Query()
+	if changed, err := setURLValues(values, rawCfg, role, "query"); err != nil || !changed {
+		return err
+	}
+	u.RawQuery = values.Encode()
+	return nil
+}
+
+// parseForm encodes "form" key-value pairs (if there are any) as a URL-encoded HTTP request body.
+// It returns nil if there are none, and an error if the type of any configured value isn't a string.
+func parseForm(rawCfg any, role string) ([]byte, error) {
+	values := make(url.Values)
+	if changed, err := setURLValues(values, rawCfg, role, "form"); err != nil || !changed {
+		return nil, err
+	}
+	return []byte(values.Encode()), nil
+}
+
+// setURLValues sets the key-value pairs of a configured table (e.g., "query" or "form") in the given
+// values, overriding existing ones with the same name. It reports whether the table has any pairs,
+// and returns an error if it isn't a table, or if the type of any configured value isn't a string.
+func setURLValues(values url.Values, rawCfg any, role, section string) (bool, error) {
 	if rawCfg == nil {
-		return nil
+		return false, nil
 	}
 	cfg, ok := rawCfg.(map[string]any)
 	if !ok {
-		return fmt.Errorf("HTTP %s 'query' must be a table of string key-value pairs, got %T", role, rawCfg)
-	}
-	if len(cfg) == 0 {
-		return nil
+		return false, fmt.Errorf("HTTP %s %q must be a table of string key-value pairs, got %T", role, section, rawCfg)
 	}
 
-	values := u.Query()
 	for key, rawValue := range cfg {
-		if v, ok := rawValue.(string); ok {
-			values.Set(key, v)
-			continue
+		v, ok := rawValue.(string)
+		if !ok {
+			return false, fmt.Errorf("%s parameter %q must be a string, got %T", section, key, rawValue)
 		}
-		return fmt.Errorf("query parameter %q must be a string, got %T", key, rawValue)
+		values.Set(key, v)
 	}
 
-	u.RawQuery = values.Encode()
-	return nil
+	return len(cfg) > 0, nil
 }
 
 func parseHeaders(rawCfg any, role string) (http.Header, error) {
@@ -73,7 +93,7 @@ func parseHeaders(rawCfg any, role string) (http.Header, error) {
 	}
 	cfg, ok := rawCfg.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("HTTP %s 'headers' must be a table of string key-value pairs, got %T", role, rawCfg)
+		return nil, fmt.Errorf(`HTTP %s "headers" must be a table of string key-value pairs, got %T`, role, rawCfg)
 	}
 
 	headers := make(http.Header, len(cfg))
@@ -92,6 +112,21 @@ func parseHeaders(rawCfg any, role string) (http.Header, error) {
 	}
 
 	return headers, nil
+}
+
+// setContentType sets the given default content type (if there is one) in the given headers, unless they
+// already specify one. An explicitly empty "Content-Type" header means "don't send it at all" (not even
+// the default one), so it's removed: an empty value isn't a valid media type, and servers may reject it.
+func setContentType(h http.Header, defaultType string) {
+	if _, found := h[contentTypeHeader]; !found {
+		if defaultType != "" {
+			h.Set(contentTypeHeader, defaultType)
+		}
+		return
+	}
+	if h.Get(contentTypeHeader) == "" {
+		h.Del(contentTypeHeader)
+	}
 }
 
 func parseByteSize(cfg map[string]any, key, name string, defaultValue int64) int64 {

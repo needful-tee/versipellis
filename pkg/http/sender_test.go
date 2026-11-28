@@ -371,6 +371,12 @@ func TestSenderSend(t *testing.T) {
 			},
 		},
 		{
+			name:    "blob_with_empty_content_type",
+			headers: map[string]any{contentTypeHeader: ""},
+			chunk:   flow.Blobs{[]byte("x")},
+			want:    []sentRequest{{body: "x", header: http.Header{}, query: "p1=good"}},
+		},
+		{
 			name:  "structured",
 			chunk: flow.Rows{{Cols: []string{"key1"}, Vals: []any{"value1"}}, {Cols: []string{"key2"}, Vals: []any{int64(2)}}},
 			want: []sentRequest{
@@ -389,6 +395,12 @@ func TestSenderSend(t *testing.T) {
 			want: []sentRequest{
 				{body: `{"key":"value"}` + "\n", header: http.Header{contentTypeHeader: {"application/json"}}, query: "p1=good"},
 			},
+		},
+		{
+			name:    "structured_with_empty_content_type",
+			headers: map[string]any{contentTypeHeader: ""},
+			chunk:   testRow("key", "value"),
+			want:    []sentRequest{{body: `{"key":"value"}` + "\n", header: http.Header{}, query: "p1=good"}},
 		},
 		{
 			name:  "structured_encoding_error",
@@ -423,6 +435,16 @@ func TestSenderSend(t *testing.T) {
 			want: []sentRequest{{body: "test", header: http.Header{}, query: "p1=good"}},
 		},
 		{
+			name:    "http_request_with_empty_content_type",
+			headers: map[string]any{contentTypeHeader: ""},
+			chunk: flow.HTTPRequests{{
+				Header: http.Header{contentTypeHeader: {"text/plain"}, "H2": {"good"}},
+				URL:    &url.URL{},
+				Body:   io.NopCloser(strings.NewReader("test")),
+			}},
+			want: []sentRequest{{body: "test", header: http.Header{"H2": {"good"}}, query: "p1=good"}},
+		},
+		{
 			name:  "http_request_body_read_error",
 			chunk: flow.HTTPRequests{{URL: &url.URL{}, Body: io.NopCloser(iotest.ErrReader(errors.New("read error")))}},
 		},
@@ -448,6 +470,15 @@ func TestSenderSend(t *testing.T) {
 			want: []sentRequest{
 				{body: "test", header: http.Header{"H1": {"good"}, "H2": {"good"}}, query: "p1=good"},
 			},
+		},
+		{
+			name:    "http_response_with_empty_content_type",
+			headers: map[string]any{contentTypeHeader: ""},
+			chunk: flow.HTTPResponses{{
+				Header: http.Header{contentTypeHeader: {"text/plain"}, "H2": {"good"}},
+				Body:   io.NopCloser(strings.NewReader("test")),
+			}},
+			want: []sentRequest{{body: "test", header: http.Header{"H2": {"good"}}, query: "p1=good"}},
 		},
 		{
 			name: "http_response_with_reusable_body",

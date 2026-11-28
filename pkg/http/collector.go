@@ -74,9 +74,11 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 	if c.headers, err = parseHeaders(cfg["headers"], "collector"); err != nil {
 		return nil, err
 	}
-	if c.body, err = loadBody(cfg, c.method); err != nil {
+	var contentType string
+	if c.body, contentType, err = loadBody(cfg, c.method); err != nil {
 		return nil, err
 	}
+	setContentType(c.headers, contentType)
 	c.maxBodySize = parseByteSize(cfg, "max_body_size", c.Name, defaultMaxBodySize)
 	c.maxHeaderSize = parseByteSize(cfg, "max_headers_size", c.Name, defaultMaxHeaderSize)
 
@@ -114,29 +116,45 @@ func NewCollector(base *config.BaseCollector, cfg map[string]any) (*Collector, e
 	return c, nil
 }
 
-func loadBody(cfg map[string]any, method string) ([]byte, error) {
+// loadBody returns the configured HTTP request body (if there is one), from one of 3 mutually exclusive sources:
+// an inline string, a file, or a table of form parameters. It also returns the body's default content type,
+// which is known only for forms, and which an explicitly configured "Content-Type" header should override.
+func loadBody(cfg map[string]any, method string) ([]byte, string, error) {
 	inline := config.Value(cfg, "body", "") // Not trimming leading/trailing whitespaces because this payload may be signed.
 	path := strings.TrimSpace(config.Value(cfg, "body_file", ""))
+	form, err := parseForm(cfg["form"], "collector")
+	if err != nil {
+		return nil, "", err
+	}
+
+	sources := 0
+	for _, configured := range []bool{inline != "", path != "", form != nil} {
+		if configured {
+			sources++
+		}
+	}
 
 	switch {
-	case inline == "" && path == "":
-		return nil, nil
+	case sources == 0:
+		return nil, "", nil
 	case method == http.MethodGet:
-		return nil, errors.New("HTTP GET requests cannot have a body")
-	case inline != "" && path != "":
-		return nil, errors.New("both HTTP body string and HTTP body file are provided, specify only one")
-	case inline != "" && path == "":
-		return []byte(inline), nil
+		return nil, "", errors.New("HTTP GET requests cannot have a body")
+	case sources > 1:
+		return nil, "", errors.New(`"body", "body_file", and "form" are mutually exclusive, specify at most one`)
+	case inline != "":
+		return []byte(inline), "", nil
+	case form != nil:
+		return form, formContentType, nil
 	}
 
 	body, err := os.ReadFile(path) //gosec:disable G304 // Path is configurable by design.
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(body) == 0 {
-		return nil, errors.New("specified HTTP body file is empty: " + path)
+		return nil, "", errors.New("specified HTTP body file is empty: " + path)
 	}
-	return body, nil // Not trimming leading/trailing whitespaces because this payload may be binary.
+	return body, "", nil // Not trimming leading/trailing whitespaces because this payload may be binary.
 }
 
 // Start connects to the configured HTTP server and starts sending requests to it. This method

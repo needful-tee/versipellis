@@ -16,7 +16,14 @@ method = "GET"
 url = "https://slack.com/api/conversations.list"
 query = { exclude_archived = "true", limit = "100", types = "public_channel" }
 
-# Same-same, but different, but still same (POST with a URL-encoded body instead of GET):
+# Same but different (POST with a web-form body instead of GET with a URL query):
+
+# [collector.http3]
+# method = "POST"
+# url = "https://slack.com/api/conversations.list"
+# form = { exclude_archived = "true", limit = "100", types = "public_channel" }
+
+# Same but different (manually encoded body instead of auto-constructed):
 
 # [collector.http3]
 # method = "POST"
@@ -24,7 +31,7 @@ query = { exclude_archived = "true", limit = "100", types = "public_channel" }
 # headers = { content-type = "application/x-www-form-urlencoded" }
 # body = "exclude_archived=true&limit=100&types=public_channel"
 
-# Same-same, but different, but still same (UTF8-encoded JSON body instead of a web-form):
+# Same but different (UTF-8-encoded JSON body instead of a web-form):
 
 # [collector.http3]
 # method = "POST"
