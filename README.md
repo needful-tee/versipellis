@@ -54,7 +54,7 @@ docker run -d --name my-versi-container \
   - unixODBC
 
 > [!TIP]
-> When specifying a local listener address for receivers and OAuth webhooks in a **containerized** TOML configuration file, use `"0.0.0.0:port"` or `"[::]:port"`, Docker's port mappings can't reach loopback listeners inside the container.
+> When specifying a local listener address for receivers and OAuth webhooks in a **containerized** TOML configuration file, use `"0.0.0.0:port"` or `"[::]:port"`, because Docker's port mappings cannot reach loopback listeners inside the container.
 
 ### Installation Option 2: Precompiled Executable Binary
 
