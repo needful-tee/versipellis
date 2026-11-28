@@ -39,6 +39,6 @@ oauth_client_secret = "1234567890abcdef"
 oauth_auth_url = "https://slack.com/oauth/v2/authorize"
 oauth_token_url = "https://slack.com/api/oauth.v2.access"
 oauth_callback_url = "https://..." # Via ngrok, Cloudflare Tunnel, etc.
-oauth_callback_address = "localhost:4474"
+oauth_callback_address = "0.0.0.0:4678"
 oauth_scopes = [ "channels:read" ]
 oauth_pkce = false

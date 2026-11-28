@@ -37,16 +37,24 @@ Command line example:
 ```shell
 docker run -d --name my-versi-container \
        -v $HOME/versi/config:/app/config -v $HOME/versi/data:/app/data \
+       -p 2678:2678/tcp -p 3678:3678/udp -p 127.0.0.1:4678:4678/tcp \
        ghcr.io/needful-tee/versipellis:latest
 ```
 
 - Platforms: Linux (amd64/arm64)
-- Volumes / mount points:
+- Mount volumes / mount points:
   - `/app/config` - app and database configuration files, TLS certificates
   - `/app/data` - [dead-letter queue](./docs/dead_letter_queue.md) (data that was received but not delivered)
+- Ports (optional and configurable):
+  - `2678/tcp` - default port for HTTP/1.1 and HTTP/2 receivers in documentation and examples
+  - `3678/udp` - default port for HTTP/3 receivers in documentation and examples
+  - `4678/tcp` - default port for OAuth 2 callback webhooks
 - Already bundled and tested with:
   - Oracle Instant Client
   - unixODBC
+
+> [!TIP]
+> When specifying a local listener address for receivers and OAuth webhooks in a **containerized** TOML configuration file, use `"0.0.0.0:port"` instead of `"locahost:port"`, etc.
 
 ### Installation Option 2: Precompiled Executable Binary
 

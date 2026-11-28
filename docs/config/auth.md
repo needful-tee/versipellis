@@ -131,10 +131,10 @@ It is entirely optional, but some fields may be required in some use-cases.
 
 - Required when `oauth_grant_type = "authorization_code"`
 - Examples:
-  - `"localhost:4474"`
-  - `"127.0.0.1:4474"` (IPv4)
-  - `"[::1]:4474"` (IPv6, must be enclosed in square brackets)
-  - `"0.0.0.0:4474"` or `"[::]:4474"` (all network interfaces)
+  - `"localhost:4678"`
+  - `"127.0.0.1:4678"` (IPv4)
+  - `"[::1]:4678"` (IPv6, must be enclosed in square brackets)
+  - `"0.0.0.0:4678"` or `"[::]:4678"` (all network interfaces) - use this inside containers!
 
 `oauth_refresh_token` - static refresh token
 

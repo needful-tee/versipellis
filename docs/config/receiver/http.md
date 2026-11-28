@@ -6,10 +6,10 @@
 
 - Required
 - Examples:
-  - `"localhost:2474"`
-  - `"127.0.0.1:2474"` (IPv4)
-  - `"[::1]:2474"` (IPv6, must be enclosed in square brackets)
-  - `"0.0.0.0:2474"` or `"[::]:2474"` (all network interfaces)
+  - `"localhost:2678"`
+  - `"127.0.0.1:2678"` (IPv4)
+  - `"[::1]:2678"` (IPv6, must be enclosed in square brackets)
+  - `"0.0.0.0:2678"` or `"[::]:2678"` (all network interfaces) - use this inside containers!
 
 `max_body_size` - maximum byte size of a client request's whole body
 
