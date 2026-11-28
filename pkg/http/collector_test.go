@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"crypto/tls"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"needful-t.ee/versipellis/internal/sandbox"
+	"needful-t.ee/versipellis/pkg/codec"
 	"needful-t.ee/versipellis/pkg/config"
 	"needful-t.ee/versipellis/pkg/dest"
 )
@@ -115,6 +117,69 @@ func TestNewCollector(t *testing.T) {
 			wantMethod:  http.MethodPost,
 			wantHeaders: http.Header{contentTypeHeader: {formContentType}},
 			wantBody:    "f1=1&f2=2",
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "json_body_with_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg:  map[string]any{"url": "https://example.com", "method": "POST", "body": `{"a": 1}`},
+
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentTypeHeader: {codec.JSON.ContentType()}},
+			wantBody:    `{"a": 1}`,
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "json_body_with_explicit_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "body": `{"a": 1}`,
+				"headers": map[string]any{"content-type": "application/vnd.api+json"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{contentTypeHeader: {"application/vnd.api+json"}},
+			wantBody:    `{"a": 1}`,
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "json_body_with_explicit_empty_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "body": `{"a": 1}`,
+				"headers": map[string]any{"content-type": ""},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{}, // Neither the default content type nor an empty one.
+			wantBody:    `{"a": 1}`,
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "encoded_json_body_without_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "body": `{"a": 1}`,
+				"headers": map[string]any{"content-encoding": "gzip"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{"Content-Encoding": {"gzip"}},
+			wantBody:    `{"a": 1}`,
+			wantTimeout: defaultRequestTimeout,
+		},
+		{
+			name: "encoded_form_with_default_content_type",
+			base: &config.BaseCollector{Type: config.CollectorTypeHTTP},
+			cfg: map[string]any{
+				"url": "https://example.com", "method": "POST", "form": map[string]any{"a": "1"},
+				"headers": map[string]any{"content-encoding": "gzip"},
+			},
+			wantURL:     "https://example.com",
+			wantMethod:  http.MethodPost,
+			wantHeaders: http.Header{"Content-Encoding": {"gzip"}, contentTypeHeader: {formContentType}},
+			wantBody:    "a=1",
 			wantTimeout: defaultRequestTimeout,
 		},
 		{
@@ -240,15 +305,39 @@ func TestLoadBody(t *testing.T) {
 	t.Parallel()
 
 	bodyWithSpaces := "\n text  \n\n"
+	jsonObject := "\n { \"a\": 1, \"a\": [true, null] } \n"
 	tempDir := t.TempDir()
-	err := os.WriteFile(filepath.Join(tempDir, "empty.txt"), []byte{}, 0o600) //gosec:disable G304 // Unit test.
-	if err != nil {
-		t.Fatal(err)
+	files := map[string]string{
+		"empty.txt":      "",
+		"body.txt":       bodyWithSpaces,
+		"json.txt":       jsonObject,
+		"invalid.json":   bodyWithSpaces,
+		"line.ndjson":    jsonObject,
+		"UPPER.NDJSON":   jsonObject,
+		"json_no_ext":    jsonObject,
+		"text_no_ext":    bodyWithSpaces,
+		"json.unknown-x": jsonObject,
+		"valid.json":     jsonObject,
+		"valid.json.gz":  "\x1f\x8b\x08\x00",
+		"text.unknown-x": bodyWithSpaces,
+	}
+	for name, content := range files {
+		//gosec:disable G304 // Unit test.
+		if err := os.WriteFile(filepath.Join(tempDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	err = os.WriteFile(filepath.Join(tempDir, "body.txt"), []byte(bodyWithSpaces), 0o600) //gosec:disable G304 // Unit test.
-	if err != nil {
-		t.Fatal(err)
+	// The MIME types of JSON and NDJSON file extensions are fixed, but those of other extensions come from
+	// Go's built-in table, which OS tables may override, so these tests don't assume their exact values.
+	jsonType, ndjsonType := codec.JSON.ContentType(), codec.NDJSON.ContentType()
+	textType := mime.TypeByExtension(".txt")
+	if textType == "" || textType == jsonType {
+		t.Fatalf("unusable MIME type for the .txt file extension: %q", textType)
+	}
+	gzipType := mime.TypeByExtension(".gz")
+	if gzipType == "" || gzipType == jsonType {
+		t.Fatalf("unusable MIME type for the .gz file extension: %q", gzipType)
 	}
 
 	tests := []struct {
@@ -257,6 +346,7 @@ func TestLoadBody(t *testing.T) {
 		path     string
 		form     any
 		method   string
+		encoded  bool
 		want     string
 		wantType string
 		wantErr  bool
@@ -361,8 +451,128 @@ func TestLoadBody(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "valid_body_file",
-			path: filepath.Join(tempDir, "body.txt"),
+			name:     "valid_body_file",
+			path:     filepath.Join(tempDir, "body.txt"),
+			want:     bodyWithSpaces,
+			wantType: textType,
+		},
+		{
+			name:     "inline_json_object",
+			body:     jsonObject,
+			want:     jsonObject,
+			wantType: jsonType,
+		},
+		{
+			name:     "inline_json_array",
+			body:     "[]",
+			want:     "[]",
+			wantType: jsonType,
+		},
+		{
+			name: "inline_json_string",
+			body: `"{}"`,
+			want: `"{}"`,
+		},
+		{
+			name: "inline_json_number",
+			body: "42",
+			want: "42",
+		},
+		{
+			name: "inline_truncated_json",
+			body: `{"a": 1`,
+			want: `{"a": 1`,
+		},
+		{
+			name: "inline_json_with_trailing_data",
+			body: "{} {}",
+			want: "{} {}",
+		},
+		{
+			name: "inline_json_with_byte_order_mark",
+			body: "\ufeff{}",
+			want: "\ufeff{}",
+		},
+		{
+			name: "inline_whitespace_only",
+			body: " \n",
+			want: " \n",
+		},
+		{
+			name:     "file_extension_overrides_json_content",
+			path:     filepath.Join(tempDir, "json.txt"),
+			want:     jsonObject,
+			wantType: textType,
+		},
+		{
+			name:     "file_extension_without_json_content",
+			path:     filepath.Join(tempDir, "invalid.json"),
+			want:     bodyWithSpaces,
+			wantType: jsonType,
+		},
+		{
+			name:     "ndjson_file_extension_overrides_json_content",
+			path:     filepath.Join(tempDir, "line.ndjson"),
+			want:     jsonObject,
+			wantType: ndjsonType,
+		},
+		{
+			name:     "uppercase_ndjson_file_extension",
+			path:     filepath.Join(tempDir, "UPPER.NDJSON"),
+			want:     jsonObject,
+			wantType: ndjsonType,
+		},
+		{
+			name:     "json_file_without_extension",
+			path:     filepath.Join(tempDir, "json_no_ext"),
+			want:     jsonObject,
+			wantType: jsonType,
+		},
+		{
+			name: "text_file_without_extension",
+			path: filepath.Join(tempDir, "text_no_ext"),
+			want: bodyWithSpaces,
+		},
+		{
+			name:     "json_file_with_unrecognized_extension",
+			path:     filepath.Join(tempDir, "json.unknown-x"),
+			want:     jsonObject,
+			wantType: jsonType,
+		},
+		{
+			name:     "compressed_file_without_content_encoding",
+			path:     filepath.Join(tempDir, "valid.json.gz"),
+			want:     "\x1f\x8b\x08\x00",
+			wantType: gzipType,
+		},
+		{
+			name:    "compressed_file_with_content_encoding",
+			path:    filepath.Join(tempDir, "valid.json.gz"),
+			encoded: true,
+			want:    "\x1f\x8b\x08\x00",
+		},
+		{
+			name:    "json_file_with_content_encoding",
+			path:    filepath.Join(tempDir, "valid.json"),
+			encoded: true,
+			want:    jsonObject,
+		},
+		{
+			name:    "inline_json_with_content_encoding",
+			body:    jsonObject,
+			encoded: true,
+			want:    jsonObject,
+		},
+		{
+			name:     "form_with_content_encoding",
+			form:     map[string]any{"a": "1"},
+			encoded:  true,
+			want:     "a=1",
+			wantType: formContentType,
+		},
+		{
+			name: "text_file_with_unrecognized_extension",
+			path: filepath.Join(tempDir, "text.unknown-x"),
 			want: bodyWithSpaces,
 		},
 	}
@@ -371,7 +581,7 @@ func TestLoadBody(t *testing.T) {
 			t.Parallel()
 
 			cfg := map[string]any{"body": tt.body, "body_file": tt.path, "form": tt.form}
-			gotBytes, gotType, gotErr := loadBody(cfg, tt.method)
+			gotBytes, gotType, gotErr := loadBody(cfg, tt.method, tt.encoded)
 			if (gotErr != nil) != tt.wantErr {
 				t.Fatalf("loadBody() error = %v, wantErr %v", gotErr, tt.wantErr)
 			}
