@@ -467,7 +467,7 @@ func authErrorResponse(err error) (*http.Response, bool) {
 
 // processResponse either reads or drains the given [http.Response.Body], based on [http.Response.StatusCode]
 // and [http.Response.ContentLength]. Either way, it returns a copy of the [http.Response] with a guaranteed
-// non-nil and locally-buffered [http.Response.Body] (although it may be empty based on the above).
+// non-nil and locally buffered [http.Response.Body] (although it may be empty based on the above).
 //
 // This decouples receiving data over an unreliable network from processing and sending it elsewhere.
 // Either way, the original response body is consumed and closed, which is important for connection reuse.

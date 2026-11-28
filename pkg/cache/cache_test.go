@@ -138,7 +138,7 @@ func TestCacheSingleItemMethods(t *testing.T) {
 			}
 
 			if !tt.exist {
-				return // Skip the rest of the tests for initially-non-existent item scenarios.
+				return // Skip the rest of the tests for initially non-existent item scenarios.
 			}
 
 			// Delete.

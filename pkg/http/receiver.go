@@ -200,7 +200,7 @@ func (r *Receiver) sendRequest(inReq *http.Request, body []byte) bool {
 	return true
 }
 
-// outgoingRequest clones a received HTTP request, with its locally-buffered body, so it can be passed to senders.
+// outgoingRequest clones a received HTTP request, with its locally buffered body, so it can be passed to senders.
 func outgoingRequest(inReq *http.Request, body []byte) *http.Request {
 	// We ignore the incoming request's method and path, to use the sender's preconfigured values.
 	outReq := inReq.Clone(inReq.Context())
@@ -220,7 +220,7 @@ func outgoingRequest(inReq *http.Request, body []byte) *http.Request {
 	return outReq
 }
 
-// readRequest reads the provided [http.Request.Body], and returns a locally-buffered copy,
+// readRequest reads the provided [http.Request.Body], and returns a locally buffered copy,
 // to decouple receiving data over an unreliable network from processing and sending it
 // elsewhere. This is safe because [http.Request.Body] is never nil in server requests.
 func readRequest(w http.ResponseWriter, r *http.Request, name string, maxBytes int64) ([]byte, bool) {
